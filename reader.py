@@ -49,11 +49,12 @@ def ptb_raw_data(data_path=None):
     valid_path = os.path.join(data_path, "ptb.valid.txt")
     test_path = os.path.join(data_path, "ptb.test.txt")
 
-    word_to_id = _build_vocab(train_path)
+    word_to_id = _build_vocab(train_path)  # build vocabulary use train dataset
+    # word_to_id is a dictionary with [word] as the key and [index/integer] as the value
     train_data = _file_to_word_ids(train_path, word_to_id)
     valid_data = _file_to_word_ids(valid_path, word_to_id)
     test_data = _file_to_word_ids(test_path, word_to_id)
-    vocabulary = len(word_to_id)
+    vocabulary = len(word_to_id)    # integer to token
     return train_data, valid_data, test_data, vocabulary
 
 
