@@ -15,7 +15,9 @@ def _read_words(filename):
     :return: list of tokens
     '''
     with tf.gfile.GFile(filename, "r") as f:
-        return f.read().decode("utf-8").replace("\n", "<eos>").split()
+        # return f.read().decode("utf-8").split('\n').split()
+        return f.read().split()
+
 
 
 def _build_vocab(filename):
@@ -42,7 +44,6 @@ def _file_to_word_ids(filename, word_to_id):
     '''
     data = _read_words(filename)
     return [word_to_id[word] for word in data if word in word_to_id]
-
 
 def ptb_raw_data(data_path=None):
     """Load PTB raw data from data directory "data_path".
