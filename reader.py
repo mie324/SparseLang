@@ -10,11 +10,19 @@ import tensorflow as tf
 
 
 def _read_words(filename):
+    '''
+    :param filename: Path to data
+    :return: list of tokens
+    '''
     with tf.gfile.GFile(filename, "r") as f:
         return f.read().decode("utf-8").replace("\n", "<eos>").split()
 
 
 def _build_vocab(filename):
+    '''
+    :param filename: Path to data (typically train)
+    :return: Dictionary which converts word tokens to index. Build based on word frequency
+    '''
     data = _read_words(filename)
 
     counter = collections.Counter(data)
@@ -27,6 +35,11 @@ def _build_vocab(filename):
 
 
 def _file_to_word_ids(filename, word_to_id):
+    '''
+    :param filename: Path to data
+    :param word_to_id: Dictionary which converts word tokens to index.
+    :return: List of token index
+    '''
     data = _read_words(filename)
     return [word_to_id[word] for word in data if word in word_to_id]
 
@@ -42,6 +55,7 @@ def ptb_raw_data(data_path=None):
         been extracted.
     Returns:
       tuple (train_data, valid_data, test_data, vocabulary)
+      vocabulary:  List which converts index to word token
       where each of the data objects can be passed to PTBIterator.
     """
 
@@ -69,6 +83,8 @@ def ptb_producer(raw_data, batch_size, num_steps, name=None):
     Returns:
       A pair of Tensors, each shaped [batch_size, num_steps]. The second element
       of the tuple is the same data time-shifted to the right by one.
+      x: Input [batch_size, num_steps]
+      y: Label [batch_size, num_steps]
     Raises:
       tf.errors.InvalidArgumentError: if batch_size or num_steps are too high.
     """
