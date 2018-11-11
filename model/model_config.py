@@ -35,9 +35,6 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-# from tensorflow.models.rnn.ptb import reader
-
-
 FLAGS = tf.flags.FLAGS
 
 
@@ -114,10 +111,10 @@ def get_config():
         return LargeSparseConfig()
     elif FLAGS.model_size == "test":
         return TestSparseConfig()
-    elif FLAGS.model_size =="customized":
+    elif FLAGS.model_size == "customized":
         raise NotImplementedError
     else:
-        raise ValueError("Invalid model: %s", FLAGS.model)
+        raise ValueError("Invalid model size: %s", FLAGS.model_size)
 
 
 def get_eval_config():
