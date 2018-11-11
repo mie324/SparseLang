@@ -5,19 +5,45 @@ Dataset Utils: Complete Sentence and Bucket Iterator
 import tensorflow as tf
 import os
 import numpy as np
-from reader import _build_vocab as _build_vocab
+from dataset.reader import _build_vocab
+
+FLAGS = tf.flags.FLAGS
+tf.flags.DEFINE_integer("batch_size", 128, "Batch size.")
 
 def convert_to_sentence():
     pass
 
 
+def parse_exmp(source):
+    # features = tf.parse_single_example(serial_exmp, features={'input': tf.VarLenFeature(tf.int32)})
+    #
+    # source = tf.sparse_tensor_to_dense(features['input'], default_value=0)
+
+    source = tf.cast(tf.reshape(source, (1, -1)), tf.int32)
+
+    seq_len = tf.shape(source) + 1
+
+    input = tf.concat(([0], source), 0)
+    label = tf.concat((source, [0]), 0)
+
+    return input, label, seq_len
+
+
+def train_input_fn(filename):
+    dataset = split_dataset(filename)
+    dataset = word_to_id(filename, dataset)
+    dataset = tf.data.Dataset.from_tensors(dataset)
+
+    dataset = dataset.map(map_func=parse_exmp)
+    dataset = bucket_batch(dataset, batch_size=FLAGS.batchsize)
+    return dataset
+
+
 def split_dataset(filename):
     with tf.gfile.GFile(filename, "r") as f:
-        # sentences = f.read().decode("utf-8").split('\n')
         sentences = f.read().split('\n')
-        for i,sentence in enumerate(sentences):
+        for i, sentence in enumerate(sentences):
             sentences[i] = sentence.split()
-
 
         return np.asarray(sentences)
 
@@ -61,30 +87,32 @@ def bucket_batch(dataset, batch_size):
 
     return batched_dataset
 
-def word_to_id(filename,dataset):
+
+def word_to_id(filename, dataset):
     word_to_id = _build_vocab(filename)
-    for i,sentence in enumerate(dataset):
+    # sentence_length = []
+    for i, sentence in enumerate(dataset):
         dataset[i] = [word_to_id[word] for word in sentence if word in word_to_id]
+        # sentence_length.append(len(dataset[i]))
     return dataset
+
 
 def dataset_generator(filename):
     dataset = split_dataset(filename)
-    dataset = word_to_id(filename,dataset)
+    dataset = word_to_id(filename, dataset)
     print('hhah')
     # input =
     # output =
 
-
     bucket_dataset = bucket_batch(dataset, batch_size)
 
-
     dataset = tf.data.Dataset.from_tensor_slices((features, labels))
-
 
 
 def train_input(filename):
     dataset = dataset_generator(filename)
     dataset = tf.Dataset.from_numpy
+
 
 if __name__ == '__main__':
     print(os.getcwd())
