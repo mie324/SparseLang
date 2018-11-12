@@ -1,5 +1,6 @@
 '''
 Dataset Utils: Complete Sentence and Bucket Iterator
+Reference web: # https://cs230-stanford.github.io/tensorflow-input-data.html: Creating the vocabulary
 '''
 
 import tensorflow as tf
@@ -100,7 +101,7 @@ def dataset_textline(filename, word_to_id):
 
     return dataset
 
-# https://cs230-stanford.github.io/tensorflow-input-data.html: Creating the vocabulary
+
 
 def parse_exmp(sentence, word_to_id):
     sentence_token = sentence.split()
