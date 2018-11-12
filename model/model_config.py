@@ -118,7 +118,7 @@ def get_config():
 
 
 def get_eval_config():
-    config = get_eval_config()
+    config = get_config()
     config.batch_size = 1
     config.num_steps = 1
 
