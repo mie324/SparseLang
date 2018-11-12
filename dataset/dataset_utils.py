@@ -4,38 +4,23 @@ Dataset Utils: Complete Sentence and Bucket Iterator
 
 import tensorflow as tf
 import os
+import sys
 import numpy as np
 from dataset.reader import _build_vocab
 
 FLAGS = tf.flags.FLAGS
-tf.flags.DEFINE_integer("batch_size", 128, "Batch size.")
-
-def convert_to_sentence():
-    pass
-
-
-def parse_exmp(source):
-    # features = tf.parse_single_example(serial_exmp, features={'input': tf.VarLenFeature(tf.int32)})
-    #
-    # source = tf.sparse_tensor_to_dense(features['input'], default_value=0)
-
-    source = tf.cast(tf.reshape(source, (1, -1)), tf.int32)
-
-    seq_len = tf.shape(source) + 1
-
-    input = tf.concat(([0], source), 0)
-    label = tf.concat((source, [0]), 0)
-
-    return input, label, seq_len
+tf.flags.DEFINE_integer("batch_size", 32, "Batch size.")
+tf.flags.DEFINE_integer("num_buckets", 5, "Put data into similar-length buckets.")
 
 
 def train_input_fn(filename):
     dataset = split_dataset(filename)
     dataset = word_to_id(filename, dataset)
-    dataset = tf.data.Dataset.from_tensors(dataset)
+    dataset = tf.data.Dataset.from_tensor_slices(dataset)
 
-    dataset = dataset.map(map_func=parse_exmp)
-    dataset = bucket_batch(dataset, batch_size=FLAGS.batchsize)
+    # dataset = dataset.map(map_func=parse_exmp)
+    # dataset = bucket_batch(dataset, batch_size=FLAGS.batchsize)
+    print(dataset)
     return dataset
 
 
@@ -52,12 +37,10 @@ def bucket_batch(dataset, batch_size):
     def batching_func(x):
         return x.padded_batch(batch_size, padded_shapes=(tf.TensorShape([None, 1]),  # src
                                                          tf.TensorShape([None, 1]),  # tgt
-                                                         tf.TensorShape([]),  # src_len
                                                          tf.TensorShape([])),  # tgt_len
-                              padding_values=(0.0,  # src
-                                              0.0,  # tgt
-                                              0,  # src_len
-                                              0)).prefetch(buffer_size=FLAGS.prefetch_buffer_size)
+                              padding_values=(0,  # src
+                                              0,  # tgt
+                                              0))
 
     if FLAGS.num_buckets > 1:
 
@@ -93,6 +76,7 @@ def word_to_id(filename, dataset):
     # sentence_length = []
     for i, sentence in enumerate(dataset):
         dataset[i] = [word_to_id[word] for word in sentence if word in word_to_id]
+        # dataset[i] = tf.convert_to_tensor(dataset[i])
         # sentence_length.append(len(dataset[i]))
     return dataset
 
@@ -109,13 +93,53 @@ def dataset_generator(filename):
     dataset = tf.data.Dataset.from_tensor_slices((features, labels))
 
 
-def train_input(filename):
-    dataset = dataset_generator(filename)
-    dataset = tf.Dataset.from_numpy
+def dataset_textline(filename, word_to_id):
+    dataset = tf.data.TextLineDataset(filename)
+    dataset = dataset.map(map_func=lambda string: tf.string_split([string]).values)
+    dataset = dataset.map(map_func=lambda sentence: parse_exmp(sentence, word_to_id))
+
+    return dataset
+
+# https://cs230-stanford.github.io/tensorflow-input-data.html: Creating the vocabulary
+
+def parse_exmp(sentence, word_to_id):
+    sentence_token = sentence.split()
+
+    return sentence
+
+
+def main(unused_argv):
+    # Testing function
+    print('Hello world')
+    word_to_id = _build_vocab("../data/ptb.test.txt")
+    exmp = dataset_textline("../data/ptb.test.txt", word_to_id)
+    iterator = exmp.make_one_shot_iterator()
+    input = iterator.get_next()
+
+    print('Start_session!')
+
+    with tf.Session() as sess:
+        # sess.run(iterator.initializer)
+
+        for i in range(10):
+            try:
+                # cur_input = sess.run(input)
+                # cur_label = sess.run(label)
+                # cur_seq = sess.run(seq_len)
+                # print("input",cur_input)
+                # print("label",cur_label)
+                # print("seq_len",cur_seq)
+                cur_input = sess.run(input)
+                print(cur_input)
+
+            except tf.errors.OutOfRangeError:
+                print("End of dataset")
+                print('current ', i)
+                break
+                # sess.run(iterator.initializer)
+
+    print('finished!')
 
 
 if __name__ == '__main__':
-    print(os.getcwd())
-    filename = '../data/ptb.train.txt'
-    # splited = split_dataset(filename)
-    dataset_generator(filename)
+    tf.app.run(main)
