@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
 
-def get_heat_map(key,value, file_path):
+def get_heat_map(key, value, file_path):
     shape = value.shape
     fig, ax = plt.subplots()
     im = ax.imshow(value)
@@ -145,12 +145,12 @@ def annotate_heatmap(im, data=None, valfmt="{x:.2f}",
     return texts
 
 
-def get_histogram(value, file_path, title=None, bins=100):
+def get_histogram(value, file_path, title=None, bins="auto"):
     reshape_value = np.reshape(value, [-1])
     fig, axs = plt.subplots(1, 2, tight_layout=True)
 
     # N is the count in each bin, bins is the lower-limit of the bin
-    N, bins, patches = axs[0].hist(reshape_value, bins="auto")
+    N, bins, patches = axs[0].hist(reshape_value, bins=bins)
 
     # We'll color code by height, but you could use any scalar
     fracs = N / N.max()
@@ -164,16 +164,17 @@ def get_histogram(value, file_path, title=None, bins=100):
         thispatch.set_facecolor(color)
 
     # We can also normalize our inputs by the total number of counts
-    axs[1].hist(reshape_value, bins, density=True,stacked=True)
+    N, bins, patches = axs[1].hist(reshape_value, bins=bins)
 
+    # for thisfrac, thispatch in zip(fracs, patches):
+    #     color = plt.cm.viridis(norm(thisfrac))
+    #     thispatch.set_facecolor(color)
     # Now we format the y-axis to display percentage
-    axs[1].yaxis.set_major_formatter(PercentFormatter(xmax=1))
+    axs[1].yaxis.set_major_formatter(PercentFormatter(xmax=np.sum(N)))
     if title != None:
         fig.suptitle(title)
     else:
         fig.suptitle(file_path)
-    # axs.set_title("Histogram of RNN Weight Matrix")
-    # fig.tight_layout()
 
     fig.savefig(file_path)
     plt.close(fig)
@@ -200,10 +201,12 @@ def main():
                         [1.3, 1.2, 0.0, 0.0, 0.0, 3.2, 5.1],
                         [0.1, 2.0, 0.0, 1.4, 0.0, 1.9, 6.3]])
 
-    # value = np.random.randn(60, 80)
+    value = np.random.randn(800, 100)
     #
     # get_heat_map(100 * value, "output")
-    get_heat_map(harvest,"output")
+    # get_heat_map(harvest,"output")
+
+    get_histogram(value, "output", title=None,bins=20)
 
 
 if __name__ == "__main__":
