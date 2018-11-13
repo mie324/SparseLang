@@ -46,8 +46,8 @@ def get_stat_single(key, value):
         # get_grey_image(key, value, "_original")
         # get_grey_image(key, normalized_value, "_normalized")
         # get_grey_image(key, round_value, "_round")
-        get_grey_image(key, np.abs(value), "abs")
-        get_grey_image(key, np.abs(round_value), "_roundabs")
+        get_grey_image(key, np.abs(value), "_heat_abs")
+        get_grey_image(key, np.abs(round_value), "_heat_roundabs")
 
     if FLAGS.histogram:
         # get_hist(key, value, "_original")
@@ -88,7 +88,7 @@ def get_grey_image(key, value, others=""):
         return
     out_file = os.path.join(FLAGS.output_path, key + others)
     print(out_file)
-    get_heat_map(np.array(value), out_file)
+    get_heat_map(key, np.array(value), out_file)
 
 
 def main(unarg):
