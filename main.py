@@ -1,18 +1,29 @@
 import time
+import os
+import shutil
 import numpy as np
 from model.model_config import *
 from model.model import *
 from utils.misc import print_config
 
 FLAGS = tf.flags.FLAGS
-tf.flags.DEFINE_string("model_size", "small", "A type of model. Possible options are: small, medium, large.")
+
 tf.flags.DEFINE_string("data_path", 'data', "Where the training/test data is stored.")
 tf.flags.DEFINE_string("save_path", None, "Model output directory.")
+tf.flags.DEFINE_boolean("debug", False, "whether in debug mode or not.")
 
 
-def main():
+def main(unused_argv):
     if not FLAGS.data_path:
         raise ValueError("Must set --data_path to PTB data directory")
+    if FLAGS.debug:
+        print("########## Debug Mode ##########")
+        if os.path.exists(FLAGS.save_path):
+            print("Remove previous model cache")
+            shutil.rmtree(FLAGS.save_path)
+    if not os.path.exists(FLAGS.save_path):
+        print("Create save directory {}".format(FLAGS.save_path))
+        os.makedirs(FLAGS.save_path)
 
     raw_data = reader.ptb_raw_data(FLAGS.data_path)
     train_data, valid_data, test_data, _ = raw_data
@@ -62,7 +73,7 @@ def main():
 
             if FLAGS.save_path:
                 print("Saving model to %s." % FLAGS.save_path)
-                sv.saver.save(session, FLAGS.save_path, global_step=sv.global_step)
+                sv.saver.save(session, os.path.join(os.getcwd(), FLAGS.save_path)+"/model", global_step=sv.global_step)
 
 
 def run_epoch(session, model, eval_op=None, verbose=False):
@@ -102,3 +113,5 @@ def run_epoch(session, model, eval_op=None, verbose=False):
 
 if __name__ == "__main__":
     tf.app.run()
+    # python ptb_word_knet.py --data_path data --model large --useKnetOutput --useKnet
+    # python main.py --data_path data --model_size small --model_type baseline --optimizer adam
