@@ -1120,3 +1120,4 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None):
             initializer=init_ops.constant_initializer(
                 bias_start, dtype=dtype))
     return tf.nn.bias_add(res, bias_term)
+
