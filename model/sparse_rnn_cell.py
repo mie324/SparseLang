@@ -1094,7 +1094,72 @@ def _klinear_flat(args, output_size, bias, bias_start=0.0, scope=None):
     return tf.nn.bias_add(res, bias_term)
 
 
-def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None):
+class BasicLSTMCell_sparse(RNNCell):
+
+    def __init__(self, num_units, forget_bias=1.0, input_size=None,
+                 state_is_tuple=True, activation=tanh, sparsity=0.1, use_sparse_mul=False):
+        """Initialize the basic LSTM cell.
+        Args:
+          num_units: int, The number of units in the LSTM cell.
+          forget_bias: float, The bias added to forget gates (see above).
+          input_size: Deprecated and unused.
+          state_is_tuple: If True, accepted and returned states are 2-tuples of
+            the `c_state` and `m_state`.  If False, they are concatenated
+            along the column axis.  The latter behavior will soon be deprecated.
+          activation: Activation function of the inner states.
+        """
+        if not state_is_tuple:
+            logging.warn("%s: Using a concatenated state is slower and will soon be "
+                         "deprecated.  Use state_is_tuple=True.", self)
+        if input_size is not None:
+            logging.warn("%s: The input_size parameter is deprecated.", self)
+        self._num_units = num_units
+        self._forget_bias = forget_bias
+        self._state_is_tuple = state_is_tuple
+        self._activation = activation
+        self._sparsity = sparsity
+        self._use_sparse_mul = use_sparse_mul
+
+    @property
+    def state_size(self):
+        return (LSTMStateTuple(self._num_units, self._num_units)
+                if self._state_is_tuple else 2 * self._num_units)
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    @property
+    def sparsity(self):
+        return self._sparsity
+
+    def __call__(self, inputs, state, scope=None):
+        """Long short-term memory cell (LSTM)."""
+        with vs.variable_scope(scope or type(self).__name__):  # "BasicLSTMCell"
+            # Parameters of gates are concatenated into one multiply for efficiency.
+            if self._state_is_tuple:
+                c, h = state
+            else:
+                c, h = array_ops.split(state, 2, 1)
+            # concat = _linear([inputs, h], 4 * self._num_units, True)
+            concat = _sparse_linear([inputs, h], 4 * self._num_units, True, sparsity=self._sparsity,
+                                    use_sparse_mul=self._use_sparse_mul)
+
+            # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+            i, j, f, o = array_ops.split(concat, 4, 1)
+
+            new_c = (c * sigmoid(f + self._forget_bias) + sigmoid(i) *
+                     self._activation(j))
+            new_h = self._activation(new_c) * sigmoid(o)
+
+            if self._state_is_tuple:
+                new_state = LSTMStateTuple(new_c, new_h)
+            else:
+                new_state = array_ops.concat([new_c, new_h], 1)
+            return new_h, new_state
+
+
+def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity=0.1, use_sparse_mul=False):
     if args is None or (nest.is_sequence(args) and not args):
         raise ValueError("`args` must be specified")
     if not nest.is_sequence(args):
@@ -1115,12 +1180,26 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None):
 
     # Now the computation.
     with vs.variable_scope(scope or "Linear"):
-        matrix = vs.get_variable(
-            "Matrix", [total_arg_size, output_size], dtype=dtype)
-        if len(args) == 1:
-            res = math_ops.matmul(args[0], matrix)
+        if use_sparse_mul:
+            # print("Use tf.sparse_tensor_dense_matmul !")
+            sparse_matrix = get_sparse_weightmatrix([total_arg_size, output_size], sparsity=sparsity, out_type="sparse",
+                                                    dtype=dtype)
+            sparse_matrix = tf.sparse_transpose(sparse_matrix, perm=[1, 0])
+            if len(args) == 1:
+                # res = math_ops.matmul(args[0], sparse_matrix,b_is_sparse=True)
+                input = tf.transpose(args[0], perm=[1, 0])
+            else:
+                input = tf.transpose(array_ops.concat(args, 1, ), perm=[1, 0])
+            res = tf.sparse_tensor_dense_matmul(sparse_matrix, input)
+            res = tf.transpose(res, perm=[1,0])
         else:
-            res = math_ops.matmul(array_ops.concat(args, 1, ), matrix)
+            sparse_matrix = get_sparse_weightmatrix([total_arg_size, output_size], sparsity=0.1, out_type="dense",
+                                                    dtype=dtype)
+            if len(args) == 1:
+                res = math_ops.matmul(args[0], sparse_matrix, b_is_sparse=True)
+            else:
+                res = math_ops.matmul(array_ops.concat(args, 1, ), sparse_matrix, b_is_sparse=True)
+
         if not bias:
             return res
         bias_term = vs.get_variable(
@@ -1128,7 +1207,20 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None):
             dtype=dtype,
             initializer=init_ops.constant_initializer(
                 bias_start, dtype=dtype))
+
     return tf.nn.bias_add(res, bias_term)
+
+
+def get_sparse_weightmatrix(shape, initializer="uniform", sparsity=0.1, out_type="sparse", dtype=tf.float32):
+    sparse_matrix = random_initialize_sparse_matrix(shape, initializer=initializer, sparsity=sparsity)
+    if out_type == "sparse":
+        result = dense_to_sparse_tf(sparse_matrix, trainable=True, dtype=dtype)
+    elif out_type == "dense":
+        result = tf.convert_to_tensor(sparse_matrix, dtype=dtype)
+    else:
+        raise ValueError("Unknown output type {}".format(out_type))
+
+    return result
 
 
 def convert_to_sparse(labels, dtype=np.int32):
@@ -1191,11 +1283,11 @@ def shrinkage_tf(x, threshold=None, percent=0.1):
     return x
 
 
-def random_initialize_sparse_matrix(shape, initializer="uniform", sparsity=0.1):
+def random_initialize_sparse_matrix(shape, initializer="uniform", init_scale=0.01, sparsity=0.1):
     # Directly Initialize the sparse matrix
 
     if initializer == "uniform":
-        x = np.random.uniform(size=shape)  # Todo: Init scale
+        x = np.random.uniform(low=-init_scale, high=init_scale, size=shape)  # Todo: Init scale
     elif initializer == "normal":
         x = np.random.randn(size=shape)
     else:
@@ -1209,14 +1301,14 @@ def random_initialize_sparse_matrix(shape, initializer="uniform", sparsity=0.1):
     return x
 
 
-def dense_to_sparse_tf(dense_tensor, trainable=False):
+def dense_to_sparse_tf(dense_tensor, trainable=False, dtype=tf.float32):
     '''
     :param dense_tensor: np array or tf.tensor with lots of 0.
     :return: tf.SparseTensor
     '''
     if trainable:
-        print("Create trainable tensor")
-        dense_tensor = tf.Variable(dense_tensor)
+        # print("Create trainable tensor")
+        dense_tensor = tf.Variable(dense_tensor,dtype=dtype)
     indices = tf.where(tf.not_equal(dense_tensor, tf.constant(0, dense_tensor.dtype)))
     values = tf.gather_nd(dense_tensor, indices)
     shape = tf.shape(dense_tensor, out_type=tf.int64)
@@ -1228,8 +1320,6 @@ def convert_dense_to_sparse_ny(dense_tensor):
     # It seems not necessary to implement sparse numpy array. The calculation will be done in tensorflow
     pass
 
-tf.flags.DEFINE_boolean('usesparsedensemul', False, """use sparsedensemul""")
-FLAGS = tf.flag.FLAGS
 
 def diagonal_init():
     pass
