@@ -1,6 +1,7 @@
 import tensorflow as tf
 from dataset import reader
-import rnn_cell
+from reference import rnn_cell
+from model import sparse_rnn_cell
 
 FLAGS = tf.flags.FLAGS
 
@@ -8,6 +9,11 @@ tf.flags.DEFINE_bool("use_fp16", False, "Train using 16-bit floats instead of 32
 tf.flags.DEFINE_string("model_type", "baseline", "The type of rnn model| Default: baseline(normal_lstm)")
 tf.flags.DEFINE_string("model_size", "small", "A type of model. Possible options are: small, medium, large.")
 tf.flags.DEFINE_string("output_type", "linear", "The type of output layer | Default: linear | knet")
+tf.flags.DEFINE_boolean('useSGD', False, """use SGD optimizer""")
+tf.flags.DEFINE_boolean('useAdam', True, """use Adam optimizer""")
+
+tf.flags.DEFINE_float("sparsity", 0.1, "gpu_memory_fraction.")
+tf.flags.DEFINE_boolean('use_sparse_mul', True, """tf.sparse_tensor_dense_matmul""")
 
 
 def data_type():
@@ -44,7 +50,9 @@ class PTBModel(object):
         if FLAGS.model_type == "baseline":
             lstm_cell = rnn_cell.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True)
         elif FLAGS.model_type == "sparse":
-            raise NotImplementedError
+            lstm_cell = sparse_rnn_cell.BasicLSTMCell_sparse(size, forget_bias=0.0, state_is_tuple=True,
+                                                             sparsity=FLAGS.sparsity,
+                                                             use_sparse_mul=FLAGS.use_sparse_mul)
         elif FLAGS.model_type == "knet":
             lstm_cell = rnn_cell.BasicLSTMCell_knet(size, forget_bias=0.0, state_is_tuple=True)
         else:
@@ -144,7 +152,7 @@ class PTBModel(object):
             optimizer = tf.train.AdamOptimizer(self._lr * 0.001)
             self._train_op = optimizer.apply_gradients(
                 zip(grads, tvars),
-                global_step=tf.contrib.framework.get_or_create_global_step())
+                global_step=tf.train.get_or_create_global_step())
 
         self._new_lr = tf.placeholder(
             tf.float32, shape=[], name="new_learning_rate")
