@@ -2,13 +2,14 @@ import tensorflow as tf
 from dataset import reader
 from reference import rnn_cell
 from model import sparse_rnn_cell
+from model.sparse_rnn_cell import _sparse_linear
 
 FLAGS = tf.flags.FLAGS
 
 tf.flags.DEFINE_bool("use_fp16", False, "Train using 16-bit floats instead of 32bit floats")
 tf.flags.DEFINE_string("model_type", "baseline", "The type of rnn model| Default: baseline(normal_lstm)")
 tf.flags.DEFINE_string("model_size", "small", "A type of model. Possible options are: small, medium, large.")
-tf.flags.DEFINE_string("output_type", "linear", "The type of output layer | Default: linear | knet")
+tf.flags.DEFINE_string("output_type", "linear", "The type of output layer | Default: linear | knet  | Sparse")
 tf.flags.DEFINE_boolean('useSGD', False, """use SGD optimizer""")
 tf.flags.DEFINE_boolean('useAdam', True, """use Adam optimizer""")
 
@@ -50,6 +51,11 @@ class PTBModel(object):
         if FLAGS.model_type == "baseline":
             lstm_cell = rnn_cell.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True)
         elif FLAGS.model_type == "sparse":
+            print("Use Sparse RNN with sparsity {}".format(FLAGS.sparsity))
+            if FLAGS.use_sparse_mul:
+                print("Use tf.sparse_tensor_dense_matmul")
+            else:
+                print("Use normal matmul")
             lstm_cell = sparse_rnn_cell.BasicLSTMCell_sparse(size, forget_bias=0.0, state_is_tuple=True,
                                                              sparsity=FLAGS.sparsity,
                                                              use_sparse_mul=FLAGS.use_sparse_mul)
@@ -103,6 +109,8 @@ class PTBModel(object):
                 with tf.variable_scope("softmax") as scope:
                     if FLAGS.output_type == "linear":
                         logits = rnn_cell._linear(cell_output, vocab_size, True, scope=scope)
+                    elif FLAGS.output_type == "sparse_linear":
+                        logits = _sparse_linear(cell_output, vocab_size, True, scope=scope)
                     elif FLAGS.output_type == "knet":
                         logits = rnn_cell._klinear_flat(cell_output, vocab_size, True, scope=scope)
                     else:
