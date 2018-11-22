@@ -22,7 +22,6 @@ from __future__ import print_function
 import collections
 import math
 import numpy as np
-from utils import *
 
 import tensorflow as tf
 from tensorflow.python.framework import ops
@@ -1194,12 +1193,13 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity
             res = tf.sparse_tensor_dense_matmul(sparse_matrix, input)
             res = tf.transpose(res, perm=[1, 0])
         else:
-            sparse_matrix = get_sparse_weight_matrix([total_arg_size, output_size], sparsity=0.1, out_type="dense",
+            sparse_matrix = get_sparse_weight_matrix([total_arg_size, output_size], sparsity=sparsity, out_type="dense",
                                                      dtype=dtype)
             if len(args) == 1:
                 res = math_ops.matmul(args[0], sparse_matrix, b_is_sparse=True)
             else:
-                res = math_ops.matmul(array_ops.concat(args, 1, ), sparse_matrix, b_is_sparse=True)
+                # res = math_ops.matmul(array_ops.concat(args, 1, ), sparse_matrix, b_is_sparse=True)
+                res = math_ops.matmul(array_ops.concat(args, 1, ), sparse_matrix)
 
         if not bias:
             return res
@@ -1223,12 +1223,11 @@ def get_sparse_weight_matrix(shape, sparsity=0.1, initializer="uniform", init_sc
     #                                                                              output_size))
     sparse_indices = get_sparse_index(total_arg_size, sparse_size, output_size)
     sparse_value = get_sparse_value(sparse_size, output_size, initializer, init_scale=init_scale, dtype=dtype)
-
     if out_type == "sparse":
         sparse_weight_matrix = tf.SparseTensor(indices=sparse_indices, values=sparse_value, dense_shape=shape)
     elif out_type == "dense":
         sparse_weight_matrix = tf.sparse_to_dense(sparse_indices=sparse_indices, output_shape=shape,
-                                                  sparse_values=sparse_value)
+                                                  sparse_values=sparse_value,validate_indices=False)
     else:
         raise ValueError("Unknown output type {}".format(out_type))
 
@@ -1239,11 +1238,11 @@ def get_sparse_value(sparse_size, output_size, initializer, init_scale=0.1, dtyp
     shape = [sparse_size * output_size]
     # Modify the init scale
     if initializer == "uniform":
-        sparse_value = tf.get_variable("sparse_matrix", shape=shape, dtype=dtype,
+        sparse_value = tf.get_variable("sparse_value", shape=shape, dtype=dtype,
                                        initializer=tf.initializers.random_uniform(minval=-init_scale,
                                                                                   maxval=init_scale))
     elif initializer == "normal":
-        sparse_value = tf.get_variable("sparse_matrix", shape=shape, dtype=dtype,
+        sparse_value = tf.get_variable("sparse_value", shape=shape, dtype=dtype,
                                        initializer=tf.initializers.random_normal(stddev=init_scale))
     elif initializer == "xavier":
         raise NotImplementedError
@@ -1254,12 +1253,16 @@ def get_sparse_value(sparse_size, output_size, initializer, init_scale=0.1, dtyp
 
 
 def get_sparse_index(total_arg_size, sparse_size, output_size):
-    index = np.random.randint(low=0, high=total_arg_size - 1, size=[sparse_size, output_size])
-    index_list = []
-
-    for column in range(output_size):
-        for row in range(sparse_size):
-            index_list.append([index[row, column], column])
+    # index = tf.random_uniform(shape=[sparse_size, output_size],minval=0,maxval=total_arg_size - 1,dtype=tf.int32)
+    # index = np.random.randint(low=0, high=total_arg_size - 1, size=[sparse_size, output_size])
+    shape = sparse_size * output_size
+    index = tf.get_variable("sparse_index", shape=[shape,1], dtype=tf.int64,
+                            initializer=tf.initializers.random_uniform(maxval=total_arg_size - 1, dtype=tf.int64),
+                            trainable=False)
+    constant = tf.convert_to_tensor(np.array([i for i in range(output_size)]) * np.ones(
+        shape=[sparse_size, output_size]),dtype=tf.int64)
+    constant = tf.reshape(tf.transpose(constant), [shape, 1])
+    index_list = tf.concat([index, constant], axis=1)
 
     return index_list
 
