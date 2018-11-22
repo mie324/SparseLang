@@ -1182,8 +1182,9 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity
     with vs.variable_scope(scope or "Linear"):
         if use_sparse_mul:
             # print("Use tf.sparse_tensor_dense_matmul !")
-            sparse_matrix = get_sparse_weightmatrix([total_arg_size, output_size], sparsity=sparsity, out_type="sparse",
-                                                    dtype=dtype)
+            sparse_matrix = get_sparse_weight_matrix([total_arg_size, output_size], sparsity=sparsity,
+                                                     out_type="sparse",
+                                                     dtype=dtype)
             sparse_matrix = tf.sparse_transpose(sparse_matrix, perm=[1, 0])
             if len(args) == 1:
                 # res = math_ops.matmul(args[0], sparse_matrix,b_is_sparse=True)
@@ -1191,10 +1192,10 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity
             else:
                 input = tf.transpose(array_ops.concat(args, 1, ), perm=[1, 0])
             res = tf.sparse_tensor_dense_matmul(sparse_matrix, input)
-            res = tf.transpose(res, perm=[1,0])
+            res = tf.transpose(res, perm=[1, 0])
         else:
-            sparse_matrix = get_sparse_weightmatrix([total_arg_size, output_size], sparsity=0.1, out_type="dense",
-                                                    dtype=dtype)
+            sparse_matrix = get_sparse_weight_matrix([total_arg_size, output_size], sparsity=0.1, out_type="dense",
+                                                     dtype=dtype)
             if len(args) == 1:
                 res = math_ops.matmul(args[0], sparse_matrix, b_is_sparse=True)
             else:
@@ -1211,118 +1212,56 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity
     return tf.nn.bias_add(res, bias_term)
 
 
-def get_sparse_weightmatrix(shape, initializer="uniform", sparsity=0.1, out_type="sparse", dtype=tf.float32):
-    sparse_matrix = random_initialize_sparse_matrix(shape, initializer=initializer, sparsity=sparsity)
+def get_sparse_weight_matrix(shape, sparsity=0.1, initializer="uniform", init_scale=0.1, out_type="sparse",
+                             dtype=tf.float32):
+    # Directly Initialize the sparse matrix
+    total_arg_size, output_size = shape
+    sparse_size = int(total_arg_size * sparsity)  # Make sure every hidden units have same number of connection
+    # print("Initialize Sparse Matrix! ".format(sparsity, total_arg_size, sparse_size, output_size))
+    # print(
+    #     "Sparsity:{}  total_arg_size:{}   sparse_size:{}  output_size:{}".format(sparsity, total_arg_size, sparse_size,
+    #                                                                              output_size))
+    sparse_indices = get_sparse_index(total_arg_size, sparse_size, output_size)
+    sparse_value = get_sparse_value(sparse_size, output_size, initializer, init_scale=init_scale, dtype=dtype)
+
     if out_type == "sparse":
-        result = dense_to_sparse_tf(sparse_matrix, trainable=True, dtype=dtype)
+        sparse_weight_matrix = tf.SparseTensor(indices=sparse_indices, values=sparse_value, dense_shape=shape)
     elif out_type == "dense":
-        result = tf.convert_to_tensor(sparse_matrix, dtype=dtype)
+        sparse_weight_matrix = tf.sparse_to_dense(sparse_indices=sparse_indices, output_shape=shape,
+                                                  sparse_values=sparse_value)
     else:
         raise ValueError("Unknown output type {}".format(out_type))
 
-    return result
+    return sparse_weight_matrix
 
 
-def convert_to_sparse(labels, dtype=np.int32):
-    indices = []
-    values = []
-
-    for n, seq in enumerate(labels):
-        indices.extend(zip([n] * len(seq), range(len(seq))))
-        values.extend(seq)
-
-    indices = np.asarray(indices, dtype=dtype)
-    values = np.asarray(values, dtype=dtype)
-    shape = np.asarray([len(labels), np.asarray(indices).max(0)[1] + 1], dtype=dtype)
-
-    # indices = tf.where(tf.not_equal(labels, tf.constant(0, dtype=tf.int32)))
-    # values = tf.gather_nd(labels, indices)
-    # sparse_labels = tf.SparseTensor(indices, values, dense_shape=tf.shape(labels, out_type=tf.int64))
-    # print(sparse_labels)
-
-    return indices, values, shape
-
-
-import numpy.ma as ma
-
-
-def shrinkage_np(x, threshold=None, percent=0.1):
-    # Shrink the large matrix based on its value, keep larger value.
-    # After some training , make the weght matrix sparse to test the performance.
-    if threshold and percent:
-        raise ValueError("threshold and percent can not be set simutaneously. Please only choose one instead")
-    if threshold:  # Keep large value
-        print("Keep value greater than {}".format(threshold))
-        # mask1 = ma.masked_where(x > threshold, x)
-        # mask2 = ma.masked_where(x < -threshold, x)
-        mask1 = np.where(x > threshold, 1, 0)
-        mask2 = np.where(x < -threshold, 1, 0)
-        x = mask1 * x + mask2 * x
-    if percent:  # Keep probability,keep large value
-        print("Keep {}% of Matrix value".format(percent * 100))
-        reshape_x = np.reshape(x, [-1])
-        sort_value = -np.sort(-np.abs(reshape_x))
-        threshold_value = sort_value[int(reshape_x.shape[0] * (percent))]  # Threshold keep probability
-        # mask1 = ma.masked_where(x > threshold_value, x)
-        # mask2 = ma.masked_where(x < -threshold_value, x)
-        mask1 = np.where(x > threshold_value, 1, 0)
-        mask2 = np.where(x < -threshold_value, 1, 0)
-        x = mask1 * x + mask2 * x
-    return x
-
-
-def shrinkage_tf(x, threshold=None, percent=0.1):
-    if threshold and percent:
-        raise ValueError("threshold and percent can not be set simutaneously. Please only choose one instead")
-    if threshold:  # Keep large value
-        mask = tf.to_float(x > threshold)
-        mask2 = tf.to_float(x < -threshold)
-        x = mask * x + mask2 * x
-    if percent:
-        raise NotImplementedError  # Maybe it is better to process using numpy
-    return x
-
-
-def random_initialize_sparse_matrix(shape, initializer="uniform", init_scale=0.01, sparsity=0.1):
-    # Directly Initialize the sparse matrix
-
+def get_sparse_value(sparse_size, output_size, initializer, init_scale=0.1, dtype=tf.float32):
+    shape = [sparse_size * output_size]
+    # Modify the init scale
     if initializer == "uniform":
-        x = np.random.uniform(low=-init_scale, high=init_scale, size=shape)  # Todo: Init scale
+        sparse_value = tf.get_variable("sparse_matrix", shape=shape, dtype=dtype,
+                                       initializer=tf.initializers.random_uniform(minval=-init_scale,
+                                                                                  maxval=init_scale))
     elif initializer == "normal":
-        x = np.random.randn(size=shape)
+        sparse_value = tf.get_variable("sparse_matrix", shape=shape, dtype=dtype,
+                                       initializer=tf.initializers.random_normal(stddev=init_scale))
+    elif initializer == "xavier":
+        raise NotImplementedError
     else:
         raise ValueError("Unknown Initializer")
 
-    uniform_mask = np.random.uniform(low=0.0, high=1.0, size=shape)
-    # mask = ma.masked_where(uniform_mask > sparsity, uniform_mask)
-    mask = np.where(uniform_mask < sparsity, 1, 0)
-    x = x * mask
-
-    return x
+    return sparse_value
 
 
-def dense_to_sparse_tf(dense_tensor, trainable=False, dtype=tf.float32):
-    '''
-    :param dense_tensor: np array or tf.tensor with lots of 0.
-    :return: tf.SparseTensor
-    '''
-    if trainable:
-        # print("Create trainable tensor")
-        dense_tensor = tf.Variable(dense_tensor,dtype=dtype)
-    indices = tf.where(tf.not_equal(dense_tensor, tf.constant(0, dense_tensor.dtype)))
-    values = tf.gather_nd(dense_tensor, indices)
-    shape = tf.shape(dense_tensor, out_type=tf.int64)
+def get_sparse_index(total_arg_size, sparse_size, output_size):
+    index = np.random.randint(low=0, high=total_arg_size - 1, size=[sparse_size, output_size])
+    index_list = []
 
-    return tf.SparseTensor(indices, values, shape)
+    for column in range(output_size):
+        for row in range(sparse_size):
+            index_list.append([index[row, column], column])
 
-
-def convert_dense_to_sparse_ny(dense_tensor):
-    # It seems not necessary to implement sparse numpy array. The calculation will be done in tensorflow
-    pass
-
-
-def diagonal_init():
-    pass
+    return index_list
 
 
 def debug_tensor(s, msg=None, summarize=10):
