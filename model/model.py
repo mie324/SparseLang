@@ -2,14 +2,14 @@ import tensorflow as tf
 from dataset import reader
 from reference import rnn_cell
 from model import sparse_rnn_cell
-from model.sparse_rnn_cell import _sparse_linear
+from model.sparse_rnn_cell import _sparse_linear,_klinear_flat,_linear
 
 FLAGS = tf.flags.FLAGS
 
 tf.flags.DEFINE_bool("use_fp16", False, "Train using 16-bit floats instead of 32bit floats")
 tf.flags.DEFINE_string("model_type", "baseline", "The type of rnn model| Default: baseline(normal_lstm)")
 tf.flags.DEFINE_string("model_size", "small", "A type of model. Possible options are: small, medium, large.")
-tf.flags.DEFINE_string("output_type", "linear", "The type of output layer | Default: linear | knet  | Sparse")
+tf.flags.DEFINE_string("output_type", "linear", "The type of output layer | Default: linear | knet  | sparse")
 tf.flags.DEFINE_boolean('useSGD', False, """use SGD optimizer""")
 tf.flags.DEFINE_boolean('useAdam', True, """use Adam optimizer""")
 
@@ -108,11 +108,11 @@ class PTBModel(object):
                 (cell_output, state) = cell(inputs[:, time_step, :], state)
                 with tf.variable_scope("softmax") as scope:
                     if FLAGS.output_type == "linear":
-                        logits = rnn_cell._linear(cell_output, vocab_size, True, scope=scope)
-                    elif FLAGS.output_type == "sparse_linear":
+                        logits = _linear(cell_output, vocab_size, True, scope=scope)
+                    elif FLAGS.output_type == "sparse":
                         logits = _sparse_linear(cell_output, vocab_size, True, scope=scope)
                     elif FLAGS.output_type == "knet":
-                        logits = rnn_cell._klinear_flat(cell_output, vocab_size, True, scope=scope)
+                        logits = _klinear_flat(cell_output, vocab_size, True, scope=scope)
                     else:
                         raise ValueError("Unknown output layer type")
                 # print(logits)
