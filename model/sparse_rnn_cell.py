@@ -911,6 +911,64 @@ def _linear(args, output_size, bias, bias_start=0.0, scope=None):
     return tf.nn.bias_add(res, bias_term)
 
 
+class BasicLSTMCell_knet(RNNCell):
+
+    def __init__(self, num_units, forget_bias=1.0, input_size=None,
+                 state_is_tuple=True, activation=tanh):
+        """Initialize the basic LSTM cell.
+        Args:
+          num_units: int, The number of units in the LSTM cell.
+          forget_bias: float, The bias added to forget gates (see above).
+          input_size: Deprecated and unused.
+          state_is_tuple: If True, accepted and returned states are 2-tuples of
+            the `c_state` and `m_state`.  If False, they are concatenated
+            along the column axis.  The latter behavior will soon be deprecated.
+          activation: Activation function of the inner states.
+        """
+        if not state_is_tuple:
+            logging.warn("%s: Using a concatenated state is slower and will soon be "
+                         "deprecated.  Use state_is_tuple=True.", self)
+        if input_size is not None:
+            logging.warn("%s: The input_size parameter is deprecated.", self)
+        self._num_units = num_units
+        self._forget_bias = forget_bias
+        self._state_is_tuple = state_is_tuple
+        self._activation = activation
+
+    @property
+    def state_size(self):
+        return (LSTMStateTuple(self._num_units, self._num_units)
+                if self._state_is_tuple else 2 * self._num_units)
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    def __call__(self, inputs, state, scope=None):
+        """Long short-term memory cell (LSTM)."""
+        with vs.variable_scope(scope or type(self).__name__):  # "BasicLSTMCell"
+            # Parameters of gates are concatenated into one multiply for efficiency.
+            if self._state_is_tuple:
+                c, h = state
+            else:
+                c, h = array_ops.split(state, 2, 1)
+            # concat = _linear([inputs, h], 4 * self._num_units, True)
+            concat = _klinear([inputs, h], 4 * self._num_units, True)
+
+            # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+            i, j, f, o = array_ops.split(concat, 4, 1)
+
+            new_c = (c * sigmoid(f + self._forget_bias) + sigmoid(i) *
+                     self._activation(j))
+            new_h = self._activation(new_c) * sigmoid(o)
+
+            if self._state_is_tuple:
+                new_state = LSTMStateTuple(new_c, new_h)
+            else:
+                new_state = array_ops.concat([new_c, new_h], 1)
+            return new_h, new_state
+
+
 def _klinear(args, output_size, bias, bias_start=0.0, scope=None):
     """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
     Args:
@@ -989,6 +1047,98 @@ def _klinear(args, output_size, bias, bias_start=0.0, scope=None):
             initializer=init_ops.constant_initializer(
                 bias_start, dtype=dtype))
     return tf.nn.bias_add(res, bias_term)
+
+
+def gmatmul(a, b, transpose_a=False, transpose_b=False, reduce_dim=None):
+    if reduce_dim == None:
+        #### general batch matmul
+        if len(a.get_shape()) == 3 and len(b.get_shape()) == 3:
+            return tf.matmul(a, b, adj_x=transpose_a, adj_y=transpose_b)
+        elif len(a.get_shape()) == 3 and len(b.get_shape()) == 2:
+            if transpose_b:
+                N = b.get_shape()[0].value
+            else:
+                N = b.get_shape()[1].value
+            B = a.get_shape()[0].value
+            if transpose_a:
+                K = a.get_shape()[1].value
+                a = tf.reshape(tf.transpose(a, [0, 2, 1]), [-1, K])
+            else:
+                K = a.get_shape()[-1].value
+                a = tf.reshape(a, [-1, K])
+            result = tf.matmul(a, b, transpose_b=transpose_b)
+            result = tf.reshape(result, [B, -1, N])
+            return result
+        elif len(a.get_shape()) == 2 and len(b.get_shape()) == 3:
+            if transpose_a:
+                M = a.get_shape()[1].value
+            else:
+                M = a.get_shape()[0].value
+            B = b.get_shape()[0].value
+            if transpose_b:
+                K = b.get_shape()[-1].value
+                b = tf.transpose(tf.reshape(b, [-1, K]), [1, 0])
+            else:
+                K = b.get_shape()[1].value
+                b = tf.transpose(tf.reshape(tf.transpose(b, [0, 2, 1]), [-1, K]), [1, 0])
+            result = tf.matmul(a, b, transpose_a=transpose_a)
+            result = tf.transpose(tf.reshape(result, [M, B, -1]), [1, 0, 2])
+            return result
+        else:
+            return tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+    else:
+        #### weird batch matmul
+        if len(a.get_shape()) == 2 and len(b.get_shape()) > 2:
+            ## reshape reduce_dim to the left most dim in b
+            b_shape = b.get_shape()
+            if reduce_dim != 0:
+                b_dims = list(range(len(b_shape)))
+                b_dims.remove(reduce_dim)
+                b_dims.insert(0, reduce_dim)
+                b = tf.transpose(b, b_dims)
+            a_t_shape = [item for item in a.get_shape()]
+            b_t_shape = [item for item in b.get_shape()]
+            b_t_shape[0] = a_t_shape[1] if transpose_a else a_t_shape[0]
+            b_t_shape = tf.TensorShape(b_t_shape)
+            b = tf.reshape(b, [int(b_shape[reduce_dim]), -1])
+            result = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+            result = tf.reshape(result, b_t_shape)
+
+            if reduce_dim != 0:
+                b_dims = list(range(len(b_shape)))
+                b_dims.remove(0)
+                b_dims.insert(reduce_dim, 0)
+                result = tf.transpose(result, b_dims)
+            return result
+
+        elif len(a.get_shape()) > 2 and len(b.get_shape()) == 2:
+            ## reshape reduce_dim to the right most dim in a
+            a_shape = a.get_shape()
+            outter_dim = len(a_shape) - 1
+            # reduce_dim = len(a_shape) - reduce_dim - 1
+            if reduce_dim != outter_dim:
+                a_dims = range(len(a_shape))
+                a_dims.remove(reduce_dim)
+                a_dims.insert(outter_dim, reduce_dim)
+                a = tf.transpose(a, a_dims)
+            a_t_shape = [item for item in a.get_shape()]
+            b_t_shape = [item for item in b.get_shape()]
+            a = tf.reshape(a, [-1, int(a_shape[reduce_dim])])
+            a_t_shape[-1] = b_t_shape[0] if transpose_b else b_t_shape[1]
+            a_t_shape = tf.TensorShape(a_t_shape)
+            result = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+            result = tf.reshape(result, a_t_shape)
+            if reduce_dim != outter_dim:
+                a_dims = range(len(a_shape))
+                a_dims.remove(outter_dim)
+                a_dims.insert(reduce_dim, outter_dim)
+                result = tf.transpose(result, a_dims)
+            return result
+
+        elif len(a.get_shape()) == 2 and len(b.get_shape()) == 2:
+            return tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+
+        assert False, 'something went wrong'
 
 
 def _klinear_flat(args, output_size, bias, bias_start=0.0, scope=None):
@@ -1266,6 +1416,7 @@ def get_sparse_index(total_arg_size, sparse_size, output_size):
 
     return index_list
 
+
 def _klinear_flat(args, output_size, bias, bias_start=0.0, scope=None):
     """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
     Args:
@@ -1338,6 +1489,7 @@ def _klinear_flat(args, output_size, bias, bias_start=0.0, scope=None):
             initializer=init_ops.constant_initializer(
                 bias_start, dtype=dtype))
     return tf.nn.bias_add(res, bias_term)
+
 
 def debug_tensor(s, msg=None, summarize=10):
     """Print the shape and value of a tensor at test time. Return a new tensor."""
