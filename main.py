@@ -4,13 +4,17 @@ import shutil
 import numpy as np
 from model.model_config import *
 from model.model import *
-from utils.misc import print_config
+from utils.misc import print_config, print_flags, get_num_para, print_variable
 
 FLAGS = tf.flags.FLAGS
 
 tf.flags.DEFINE_string("data_path", 'data', "Where the training/test data is stored.")
 tf.flags.DEFINE_string("save_path", None, "Model output directory.")
 tf.flags.DEFINE_boolean("debug", False, "whether in debug mode or not.")
+tf.flags.DEFINE_boolean("allow_growth", True, "GPU allow_growth.")
+tf.flags.DEFINE_float("gpu_memory_fraction", 1, "gpu_memory_fraction.")
+
+tf.flags.DEFINE_boolean("larger_hidden_size", False, "whether increase the number of hidden units given sparsity.")
 
 
 def main(unused_argv):
@@ -21,6 +25,8 @@ def main(unused_argv):
         if os.path.exists(FLAGS.save_path):
             print("Remove previous model cache")
             shutil.rmtree(FLAGS.save_path)
+    if not FLAGS.save_path:
+        raise ValueError("save_path need to be specified")
     if not os.path.exists(FLAGS.save_path):
         print("Create save directory {}".format(FLAGS.save_path))
         os.makedirs(FLAGS.save_path)
@@ -29,7 +35,11 @@ def main(unused_argv):
     train_data, valid_data, test_data, _ = raw_data
 
     config = get_config()
+    if FLAGS.larger_hidden_size:
+        config.hidden_size = int(config.hidden_size / np.sqrt(FLAGS.sparsity))
+        print("Increase Hidden Size: {}".format(config.hidden_size))
     print_config(config)
+    print_flags(FLAGS)
 
     eval_config = get_eval_config()
 
@@ -55,8 +65,15 @@ def main(unused_argv):
                 mtest = PTBModel(is_training=False, config=eval_config,
                                  input_=test_input)
 
+        print("####### Total Number of Parameters: {}".format(get_num_para()))
+        print_variable()
+
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=FLAGS.gpu_memory_fraction,
+                                    allow_growth=FLAGS.allow_growth)
+        session_config = tf.ConfigProto(gpu_options=gpu_options, allow_soft_placement=True)
+
         sv = tf.train.Supervisor(logdir=FLAGS.save_path)
-        with sv.managed_session() as session:
+        with sv.managed_session(config=session_config) as session:
             for i in range(config.max_max_epoch):
                 lr_decay = config.lr_decay ** max(i + 1 - config.max_epoch, 0.0)
                 m.assign_lr(session, config.learning_rate * lr_decay)
@@ -73,7 +90,8 @@ def main(unused_argv):
 
             if FLAGS.save_path:
                 print("Saving model to %s." % FLAGS.save_path)
-                sv.saver.save(session, os.path.join(os.getcwd(), FLAGS.save_path)+"/model", global_step=sv.global_step)
+                sv.saver.save(session, os.path.join(os.getcwd(), FLAGS.save_path) + "/model",
+                              global_step=sv.global_step)
 
 
 def run_epoch(session, model, eval_op=None, verbose=False):
@@ -115,3 +133,4 @@ if __name__ == "__main__":
     tf.app.run()
     # python ptb_word_knet.py --data_path data --model large --useKnetOutput --useKnet
     # python main.py --data_path data --model_size small --model_type baseline --optimizer adam
+    # python main.py --data_path data --model_size small --model_type sparse --optimizer adam --debug --save_path temp
