@@ -45,7 +45,7 @@ class Max_full_Config(object):
     max_grad_norm = 5
     num_layers = 2
     num_steps = 20
-    hidden_size = 4000
+    hidden_size = 3000
     max_epoch = 4
     max_max_epoch = 13
     keep_prob = 1.
@@ -98,7 +98,7 @@ class MediumSparseConfig(object):
     max_max_epoch = 50
     keep_prob = 1.0
     lr_decay = 0.5
-    batch_size = 100
+    batch_size = 25
     vocab_size = 10000
 
 
@@ -146,7 +146,7 @@ def get_config():
     elif FLAGS.model_size == "debug":
         return DebugConfig()
     elif FLAGS.model_size == "customized":
-        return Max_full_Config
+        return Max_full_Config()
     else:
         raise ValueError("Invalid model size: %s", FLAGS.model_size)
 
