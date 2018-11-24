@@ -38,10 +38,26 @@ import tensorflow as tf
 FLAGS = tf.flags.FLAGS
 
 
+class Max_full_Config(object):
+    """Small Sparse config."""
+    init_scale = 0.04
+    learning_rate = 0.05
+    max_grad_norm = 5
+    num_layers = 2
+    num_steps = 20
+    hidden_size = 4000
+    max_epoch = 4
+    max_max_epoch = 13
+    keep_prob = 1.
+    lr_decay = 0.5
+    batch_size = 20
+    vocab_size = 10000
+
+
 class SmallSparseConfig(object):
     """Small Sparse config."""
     init_scale = 0.04
-    learning_rate = 1.0
+    learning_rate = 0.05
     max_grad_norm = 5
     num_layers = 2
     num_steps = 20
@@ -54,10 +70,26 @@ class SmallSparseConfig(object):
     vocab_size = 10000
 
 
+class DebugConfig(object):
+    """Small Sparse config."""
+    init_scale = 0.04
+    learning_rate = 0.05
+    max_grad_norm = 5
+    num_layers = 1
+    num_steps = 20
+    hidden_size = 400
+    max_epoch = 1
+    max_max_epoch = 1
+    keep_prob = 1.
+    lr_decay = 0.5
+    batch_size = 20
+    vocab_size = 10000
+
+
 class MediumSparseConfig(object):
     """Medium Sparse config."""
     init_scale = 0.1
-    learning_rate = 1.0
+    learning_rate = 0.05
     max_grad_norm = 5
     num_layers = 2
     num_steps = 35
@@ -73,7 +105,7 @@ class MediumSparseConfig(object):
 class LargeSparseConfig(object):
     """Large Sparse config."""
     init_scale = 0.1
-    learning_rate = 1.0
+    learning_rate = 0.05
     max_grad_norm = 5
     num_layers = 2
     num_steps = 20
@@ -89,7 +121,7 @@ class LargeSparseConfig(object):
 class TestSparseConfig(object):
     """Tiny config, for testing."""
     init_scale = 0.1
-    learning_rate = 1.0
+    learning_rate = 0.05
     max_grad_norm = 1
     num_layers = 1
     num_steps = 2
@@ -111,8 +143,10 @@ def get_config():
         return LargeSparseConfig()
     elif FLAGS.model_size == "test":
         return TestSparseConfig()
+    elif FLAGS.model_size == "debug":
+        return DebugConfig()
     elif FLAGS.model_size == "customized":
-        raise NotImplementedError
+        return Max_full_Config
     else:
         raise ValueError("Invalid model size: %s", FLAGS.model_size)
 
