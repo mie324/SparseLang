@@ -16,7 +16,6 @@ def convert_to_sentence():
 
 def parse_exmp(source):
     # features = tf.parse_single_example(serial_exmp, features={'input': tf.VarLenFeature(tf.int32)})
-    #
     # source = tf.sparse_tensor_to_dense(features['input'], default_value=0)
 
     source = tf.cast(tf.reshape(source, (1, -1)), tf.int32)
@@ -44,8 +43,8 @@ def split_dataset(filename):
         sentences = f.read().split('\n')
         for i, sentence in enumerate(sentences):
             sentences[i] = sentence.split()
-
-        return np.asarray(sentences)
+        # return np.asarray(sentences)
+        return sentences
 
 
 def bucket_batch(dataset, batch_size):
@@ -87,22 +86,42 @@ def bucket_batch(dataset, batch_size):
 
     return batched_dataset
 
+def saveTokens(outFile_name, filename):
+    '''Function saves result of tokenFrequency into a text file.'''
+    outFile = open(outFile_name, "a+")
+    # outFile.write(uniqueLines)
+    # outFile.close
+    with tf.gfile.GFile(filename, "r") as f:
+        sentences = f.read().split('\n')
+        for i, sentence in enumerate(sentences):
+            for word in sentence.split():
+                outFile.write(word + "\r\n")
+    outFile.close
 
 def word_to_id(filename, dataset):
     word_to_id = _build_vocab(filename)
     # sentence_length = []
+    label = []
     for i, sentence in enumerate(dataset):
         dataset[i] = [word_to_id[word] for word in sentence if word in word_to_id]
+        label.append(dataset[i][1:] + [0])
         # sentence_length.append(len(dataset[i]))
-    return dataset
+    return dataset,label
 
 
 def dataset_generator(filename):
     dataset = split_dataset(filename)
-    dataset = word_to_id(filename, dataset)
-    print('hhah')
-    # input =
-    # output =
+    dataset,label = word_to_id(filename, dataset)
+
+    words = tf.contrib.lookup.index_table_from_file(dataset, num_oov_buckets=1)
+    # features = dataset
+    # labels = label
+    features = np.asarray(dataset)
+    labels = np.asarray(label)
+
+    features_placeholder = tf.placeholder(features.dtype, features.shape)
+    labels_placeholder = tf.placeholder(labels.dtype, labels.shape)
+    dataset = tf.data.Dataset.from_tensor_slices((features_placeholder, labels_placeholder))
 
     bucket_dataset = bucket_batch(dataset, batch_size)
 
@@ -113,9 +132,20 @@ def train_input(filename):
     dataset = dataset_generator(filename)
     dataset = tf.Dataset.from_numpy
 
-
-if __name__ == '__main__':
+def main():
     print(os.getcwd())
     filename = '../data/ptb.train.txt'
-    # splited = split_dataset(filename)
-    dataset_generator(filename)
+    outFile_name = "./words.txt"
+    split_dataset(filename)
+    saveTokens(outFile_name, filename)
+    words = tf.contrib.lookup.index_table_from_file("./words.txt", num_oov_buckets=1)
+    dataset = split_dataset(filename)
+    dataset = word_to_id(filename, dataset)
+    print('haha')
+
+    # dataset_generator(filename)
+    # train_input_fn(filename)
+if __name__ == '__main__':
+
+    main()
+
