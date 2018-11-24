@@ -1227,7 +1227,7 @@ def get_sparse_weight_matrix(shape, sparsity=0.1, initializer="uniform", init_sc
         sparse_weight_matrix = tf.SparseTensor(indices=sparse_indices, values=sparse_value, dense_shape=shape)
     elif out_type == "dense":
         sparse_weight_matrix = tf.sparse_to_dense(sparse_indices=sparse_indices, output_shape=shape,
-                                                  sparse_values=sparse_value,validate_indices=False)
+                                                  sparse_values=sparse_value, validate_indices=False)
     else:
         raise ValueError("Unknown output type {}".format(out_type))
 
@@ -1256,16 +1256,88 @@ def get_sparse_index(total_arg_size, sparse_size, output_size):
     # index = tf.random_uniform(shape=[sparse_size, output_size],minval=0,maxval=total_arg_size - 1,dtype=tf.int32)
     # index = np.random.randint(low=0, high=total_arg_size - 1, size=[sparse_size, output_size])
     shape = sparse_size * output_size
-    index = tf.get_variable("sparse_index", shape=[shape,1], dtype=tf.int64,
+    index = tf.get_variable("sparse_index", shape=[shape, 1], dtype=tf.int64,
                             initializer=tf.initializers.random_uniform(maxval=total_arg_size - 1, dtype=tf.int64),
                             trainable=False)
     constant = tf.convert_to_tensor(np.array([i for i in range(output_size)]) * np.ones(
-        shape=[sparse_size, output_size]),dtype=tf.int64)
+        shape=[sparse_size, output_size]), dtype=tf.int64)
     constant = tf.reshape(tf.transpose(constant), [shape, 1])
     index_list = tf.concat([index, constant], axis=1)
 
     return index_list
 
+def _klinear_flat(args, output_size, bias, bias_start=0.0, scope=None):
+    """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
+    Args:
+      args: a 2D Tensor or a list of 2D, batch x n, Tensors.
+      output_size: int, second dimension of W[i].
+      bias: boolean, whether to add a bias term or not.
+      bias_start: starting value to initialize the bias; 0 by default.
+      scope: VariableScope for the created subgraph; defaults to "Linear".
+    Returns:
+      A 2D Tensor with shape [batch x output_size] equal to
+      sum_i(args[i] * W[i]), where W[i]s are newly created matrices.
+    Raises:
+      ValueError: if some of the arguments has unspecified or wrong shape.
+    """
+    if args is None or (nest.is_sequence(args) and not args):
+        raise ValueError("`args` must be specified")
+    if not nest.is_sequence(args):
+        args = [args]
+
+    # Calculate the total size of arguments on dimension 1.
+    total_arg_size = 0
+    shapes = [a.get_shape().as_list() for a in args]
+    for shape in shapes:
+        if len(shape) != 2:
+            raise ValueError("Linear is expecting 2D arguments: %s" % str(shapes))
+        if not shape[1]:
+            raise ValueError("Linear expects shape[1] of arguments: %s" % str(shapes))
+        else:
+            total_arg_size += shape[1]
+
+    dtype = [a.dtype for a in args][0]
+
+    # Now the computation.
+
+    # total_arg_size/input = 400
+    # break it into 20 x 20
+    # output_size = 800
+    # break it into 20 x 40
+
+    # outputsize: 4 * 200          =>   4 * 50**2 = 100*100 = 10000
+    # outputsize: 4 * 200          =>   4 * 20**2 = 400*400 = 1600
+    # inputsize: 200 + 200          =>   2500 + 2500 =  100 * 50
+    # inputsize: 200 + 200          =>   200 + 2500 =  100 * 50
+    # hundredth_total_arg_size = int(total_arg_size/100)
+    in_sqrt = int(np.sqrt(total_arg_size))
+    part_in1 = in_sqrt
+    part_in2 = in_sqrt
+    part_out1 = output_size
+    part_out2 = output_size
+
+    with vs.variable_scope(scope or "Linear"):
+        matrix1 = vs.get_variable(
+            "Matrix1", [part_in1, part_out1], dtype=dtype)
+        matrix2 = vs.get_variable(
+            "Matrix2", [part_in2, part_out2], dtype=dtype)
+
+        if True:
+            input_tensor = array_ops.concat(args, 1)
+
+            inputX_reshaped = tf.reshape(input_tensor, (-1, part_in1, part_in2))
+            inputX_reshaped_L = tf.reduce_sum(inputX_reshaped, 1)
+            inputX_reshaped_R = tf.reduce_sum(inputX_reshaped, 2)
+            res = tf.matmul(inputX_reshaped_L, matrix1) + tf.matmul(inputX_reshaped_R, matrix2)
+
+        if not bias:
+            return res
+        bias_term = vs.get_variable(
+            "Bias", [output_size],
+            dtype=dtype,
+            initializer=init_ops.constant_initializer(
+                bias_start, dtype=dtype))
+    return tf.nn.bias_add(res, bias_term)
 
 def debug_tensor(s, msg=None, summarize=10):
     """Print the shape and value of a tensor at test time. Return a new tensor."""
