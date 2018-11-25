@@ -18,10 +18,33 @@ def print_flags(FLAGS):
 
 def print_variable():
     all_var = tf.trainable_variables()
+    print("##############################\n")
+    lstm_var = []
+    embedding_var = []
+    output_var = []
+
     for var in all_var:
-        num = np.product([xi.value for xi in var.get_shape()])
-        print(var.name,num)
-    print("#########################")
+        if "sparse" in var.name:
+            lstm_var.append(var)
+        elif "embedding" in var.name:
+            embedding_var.append(var)
+        elif "softmax" in var.name:
+            output_var.append(var)
+
+    def print_var(var_list, name):
+        total_num = 0
+        for var in var_list:
+            num = np.product([xi.value for xi in var.get_shape()])
+            total_num += num
+            print(var.name, num)
+        print("#######      Total   {}: {}       ########".format(name, total_num))
+
+    print_var(lstm_var,name="lstm")
+    print_var(embedding_var,name="embedding")
+    print_var(output_var,name="output")
+
+    print("\n##############################")
+
 
 def get_num_para():
     return np.sum([np.product([xi.value for xi in x.get_shape()]) for x in tf.trainable_variables()])
