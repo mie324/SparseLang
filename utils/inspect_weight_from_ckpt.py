@@ -80,7 +80,7 @@ def get_stat(var_dict):
 def get_hist(key, value, others=""):
     out_file = os.path.join(FLAGS.output_path, key + others)
     print(out_file)
-    get_histogram(value, out_file, title=key + others)
+    get_histogram(value, out_file, title=key + others, bins=45)
 
 
 def get_grey_image(key, value, others=""):

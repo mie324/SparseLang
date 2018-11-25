@@ -41,11 +41,11 @@ FLAGS = tf.flags.FLAGS
 class Max_full_Config(object):
     """Small Sparse config."""
     init_scale = 0.04
-    learning_rate = 0.05
+    learning_rate = 0.5
     max_grad_norm = 5
     num_layers = 2
     num_steps = 20
-    hidden_size = 4000
+    hidden_size = 2900
     max_epoch = 4
     max_max_epoch = 13
     keep_prob = 1.
@@ -54,10 +54,42 @@ class Max_full_Config(object):
     vocab_size = 10000
 
 
+class Same_size_Config(object):
+    """Small Sparse config."""
+    init_scale = 0.04
+    learning_rate = 0.5
+    max_grad_norm = 5
+    num_layers = 2
+    num_steps = 20
+    hidden_size = 2500
+    max_epoch = 4
+    max_max_epoch = 13
+    keep_prob = 1.
+    lr_decay = 0.5
+    batch_size = 20
+    vocab_size = 10000
+
+
+class Large_hidden_Config(object):
+    """Small Sparse config."""
+    init_scale = 0.04
+    learning_rate = 0.5
+    max_grad_norm = 5
+    num_layers = 2
+    num_steps = 20
+    hidden_size = 200
+    max_epoch = 4
+    max_max_epoch = 10
+    keep_prob = 1.
+    lr_decay = 0.5
+    batch_size = 10
+    vocab_size = 10000
+
+
 class SmallSparseConfig(object):
     """Small Sparse config."""
     init_scale = 0.04
-    learning_rate = 0.05
+    learning_rate = 0.5
     max_grad_norm = 5
     num_layers = 2
     num_steps = 20
@@ -92,13 +124,13 @@ class MediumSparseConfig(object):
     learning_rate = 0.05
     max_grad_norm = 5
     num_layers = 2
-    num_steps = 35
-    hidden_size = 10000
+    num_steps = 20
+    hidden_size = 700
     max_epoch = 16
     max_max_epoch = 50
     keep_prob = 1.0
     lr_decay = 0.5
-    batch_size = 100
+    batch_size = 25
     vocab_size = 10000
 
 
@@ -106,6 +138,22 @@ class LargeSparseConfig(object):
     """Large Sparse config."""
     init_scale = 0.1
     learning_rate = 0.05
+    max_grad_norm = 5
+    num_layers = 2
+    num_steps = 20
+    hidden_size = 250000
+    max_epoch = 4
+    max_max_epoch = 13
+    keep_prob = 1.0
+    lr_decay = 0.5
+    batch_size = 25
+    vocab_size = 10000
+
+
+class LargeConfig(object):
+    """Large Knet config."""
+    init_scale = 0.1
+    learning_rate = 1.0
     max_grad_norm = 5
     num_layers = 2
     num_steps = 20
@@ -146,7 +194,13 @@ def get_config():
     elif FLAGS.model_size == "debug":
         return DebugConfig()
     elif FLAGS.model_size == "customized":
-        return Max_full_Config
+        return Max_full_Config()
+    elif FLAGS.model_size == "knet":
+        return LargeConfig()
+    elif FLAGS.model_size == "same_size":
+        return Same_size_Config()
+    elif FLAGS.model_size == "larger_hidden":
+        return Large_hidden_Config()
     else:
         raise ValueError("Invalid model size: %s", FLAGS.model_size)
 

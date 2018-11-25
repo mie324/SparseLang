@@ -911,6 +911,64 @@ def _linear(args, output_size, bias, bias_start=0.0, scope=None):
     return tf.nn.bias_add(res, bias_term)
 
 
+class BasicLSTMCell_knet(RNNCell):
+
+    def __init__(self, num_units, forget_bias=1.0, input_size=None,
+                 state_is_tuple=True, activation=tanh):
+        """Initialize the basic LSTM cell.
+        Args:
+          num_units: int, The number of units in the LSTM cell.
+          forget_bias: float, The bias added to forget gates (see above).
+          input_size: Deprecated and unused.
+          state_is_tuple: If True, accepted and returned states are 2-tuples of
+            the `c_state` and `m_state`.  If False, they are concatenated
+            along the column axis.  The latter behavior will soon be deprecated.
+          activation: Activation function of the inner states.
+        """
+        if not state_is_tuple:
+            logging.warn("%s: Using a concatenated state is slower and will soon be "
+                         "deprecated.  Use state_is_tuple=True.", self)
+        if input_size is not None:
+            logging.warn("%s: The input_size parameter is deprecated.", self)
+        self._num_units = num_units
+        self._forget_bias = forget_bias
+        self._state_is_tuple = state_is_tuple
+        self._activation = activation
+
+    @property
+    def state_size(self):
+        return (LSTMStateTuple(self._num_units, self._num_units)
+                if self._state_is_tuple else 2 * self._num_units)
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    def __call__(self, inputs, state, scope=None):
+        """Long short-term memory cell (LSTM)."""
+        with vs.variable_scope(scope or type(self).__name__):  # "BasicLSTMCell"
+            # Parameters of gates are concatenated into one multiply for efficiency.
+            if self._state_is_tuple:
+                c, h = state
+            else:
+                c, h = array_ops.split(state, 2, 1)
+            # concat = _linear([inputs, h], 4 * self._num_units, True)
+            concat = _klinear([inputs, h], 4 * self._num_units, True)
+
+            # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+            i, j, f, o = array_ops.split(concat, 4, 1)
+
+            new_c = (c * sigmoid(f + self._forget_bias) + sigmoid(i) *
+                     self._activation(j))
+            new_h = self._activation(new_c) * sigmoid(o)
+
+            if self._state_is_tuple:
+                new_state = LSTMStateTuple(new_c, new_h)
+            else:
+                new_state = array_ops.concat([new_c, new_h], 1)
+            return new_h, new_state
+
+
 def _klinear(args, output_size, bias, bias_start=0.0, scope=None):
     """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
     Args:
@@ -991,6 +1049,98 @@ def _klinear(args, output_size, bias, bias_start=0.0, scope=None):
     return tf.nn.bias_add(res, bias_term)
 
 
+def gmatmul(a, b, transpose_a=False, transpose_b=False, reduce_dim=None):
+    if reduce_dim == None:
+        #### general batch matmul
+        if len(a.get_shape()) == 3 and len(b.get_shape()) == 3:
+            return tf.matmul(a, b, adj_x=transpose_a, adj_y=transpose_b)
+        elif len(a.get_shape()) == 3 and len(b.get_shape()) == 2:
+            if transpose_b:
+                N = b.get_shape()[0].value
+            else:
+                N = b.get_shape()[1].value
+            B = a.get_shape()[0].value
+            if transpose_a:
+                K = a.get_shape()[1].value
+                a = tf.reshape(tf.transpose(a, [0, 2, 1]), [-1, K])
+            else:
+                K = a.get_shape()[-1].value
+                a = tf.reshape(a, [-1, K])
+            result = tf.matmul(a, b, transpose_b=transpose_b)
+            result = tf.reshape(result, [B, -1, N])
+            return result
+        elif len(a.get_shape()) == 2 and len(b.get_shape()) == 3:
+            if transpose_a:
+                M = a.get_shape()[1].value
+            else:
+                M = a.get_shape()[0].value
+            B = b.get_shape()[0].value
+            if transpose_b:
+                K = b.get_shape()[-1].value
+                b = tf.transpose(tf.reshape(b, [-1, K]), [1, 0])
+            else:
+                K = b.get_shape()[1].value
+                b = tf.transpose(tf.reshape(tf.transpose(b, [0, 2, 1]), [-1, K]), [1, 0])
+            result = tf.matmul(a, b, transpose_a=transpose_a)
+            result = tf.transpose(tf.reshape(result, [M, B, -1]), [1, 0, 2])
+            return result
+        else:
+            return tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+    else:
+        #### weird batch matmul
+        if len(a.get_shape()) == 2 and len(b.get_shape()) > 2:
+            ## reshape reduce_dim to the left most dim in b
+            b_shape = b.get_shape()
+            if reduce_dim != 0:
+                b_dims = list(range(len(b_shape)))
+                b_dims.remove(reduce_dim)
+                b_dims.insert(0, reduce_dim)
+                b = tf.transpose(b, b_dims)
+            a_t_shape = [item for item in a.get_shape()]
+            b_t_shape = [item for item in b.get_shape()]
+            b_t_shape[0] = a_t_shape[1] if transpose_a else a_t_shape[0]
+            b_t_shape = tf.TensorShape(b_t_shape)
+            b = tf.reshape(b, [int(b_shape[reduce_dim]), -1])
+            result = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+            result = tf.reshape(result, b_t_shape)
+
+            if reduce_dim != 0:
+                b_dims = list(range(len(b_shape)))
+                b_dims.remove(0)
+                b_dims.insert(reduce_dim, 0)
+                result = tf.transpose(result, b_dims)
+            return result
+
+        elif len(a.get_shape()) > 2 and len(b.get_shape()) == 2:
+            ## reshape reduce_dim to the right most dim in a
+            a_shape = a.get_shape()
+            outter_dim = len(a_shape) - 1
+            # reduce_dim = len(a_shape) - reduce_dim - 1
+            if reduce_dim != outter_dim:
+                a_dims = list(range(len(a_shape)))
+                a_dims.remove(reduce_dim)
+                a_dims.insert(outter_dim, reduce_dim)
+                a = tf.transpose(a, a_dims)
+            a_t_shape = [item for item in a.get_shape()]
+            b_t_shape = [item for item in b.get_shape()]
+            a = tf.reshape(a, [-1, int(a_shape[reduce_dim])])
+            a_t_shape[-1] = b_t_shape[0] if transpose_b else b_t_shape[1]
+            a_t_shape = tf.TensorShape(a_t_shape)
+            result = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+            result = tf.reshape(result, a_t_shape)
+            if reduce_dim != outter_dim:
+                a_dims = list(range(len(a_shape)))
+                a_dims.remove(outter_dim)
+                a_dims.insert(reduce_dim, outter_dim)
+                result = tf.transpose(result, a_dims)
+            return result
+
+        elif len(a.get_shape()) == 2 and len(b.get_shape()) == 2:
+            return tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+
+        assert False, 'something went wrong'
+
+
 def _klinear_flat(args, output_size, bias, bias_start=0.0, scope=None):
     """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
     Args:
@@ -1040,6 +1190,11 @@ def _klinear_flat(args, output_size, bias, bias_start=0.0, scope=None):
     part_in2 = in_sqrt
     part_out1 = output_size
     part_out2 = output_size
+
+    # print("\n\n###########################")
+    # print("Total arg size",total_arg_size)
+    # print("part_in1",part_in1)
+    # print("output_size",output_size)
 
     with vs.variable_scope(scope or "Linear"):
         matrix1 = vs.get_variable(
@@ -1095,8 +1250,8 @@ def _klinear_flat(args, output_size, bias, bias_start=0.0, scope=None):
 
 class BasicLSTMCell_sparse(RNNCell):
 
-    def __init__(self, num_units, forget_bias=1.0, input_size=None,
-                 state_is_tuple=True, activation=tanh, sparsity=0.1, use_sparse_mul=False):
+    def __init__(self, num_units, forget_bias=1.0, input_size=None, state_is_tuple=True, activation=tanh,
+                 sparsity=0.1, use_sparse_mul=False, initializer="uniform", split_gate=False):
         """Initialize the basic LSTM cell.
         Args:
           num_units: int, The number of units in the LSTM cell.
@@ -1118,6 +1273,8 @@ class BasicLSTMCell_sparse(RNNCell):
         self._activation = activation
         self._sparsity = sparsity
         self._use_sparse_mul = use_sparse_mul
+        self._initializer = initializer
+        self._split_gate = split_gate
 
     @property
     def state_size(self):
@@ -1141,11 +1298,20 @@ class BasicLSTMCell_sparse(RNNCell):
             else:
                 c, h = array_ops.split(state, 2, 1)
             # concat = _linear([inputs, h], 4 * self._num_units, True)
-            concat = _sparse_linear([inputs, h], 4 * self._num_units, True, sparsity=self._sparsity,
-                                    use_sparse_mul=self._use_sparse_mul)
-
-            # i = input_gate, j = new_input, f = forget_gate, o = output_gate
-            i, j, f, o = array_ops.split(concat, 4, 1)
+            if self._split_gate:
+                i = _sparse_linear([inputs, h], self._num_units, True, initializer=self._initializer,
+                                   sparsity=self._sparsity, use_sparse_mul=self._use_sparse_mul, name="input_gate")
+                j = _sparse_linear([inputs, h], self._num_units, True, initializer=self._initializer,
+                                   sparsity=self._sparsity, use_sparse_mul=self._use_sparse_mul, name="new_input")
+                f = _sparse_linear([inputs, h], self._num_units, True, initializer=self._initializer,
+                                   sparsity=self._sparsity, use_sparse_mul=self._use_sparse_mul, name="forget_gate")
+                o = _sparse_linear([inputs, h], self._num_units, True, initializer=self._initializer,
+                                   sparsity=self._sparsity, use_sparse_mul=self._use_sparse_mul, name="output_gate")
+            else:
+                concat = _sparse_linear([inputs, h], 4 * self._num_units, True, initializer=self._initializer,
+                                        sparsity=self._sparsity, use_sparse_mul=self._use_sparse_mul)
+                # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+                i, j, f, o = array_ops.split(concat, 4, 1)
 
             new_c = (c * sigmoid(f + self._forget_bias) + sigmoid(i) *
                      self._activation(j))
@@ -1158,7 +1324,80 @@ class BasicLSTMCell_sparse(RNNCell):
             return new_h, new_state
 
 
-def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity=0.1, use_sparse_mul=False):
+class BasicLSTMCell_sparse_split_gate(RNNCell):
+
+    def __init__(self, num_units, forget_bias=1.0, input_size=None,
+                 state_is_tuple=True, activation=tanh, sparsity=0.1, use_sparse_mul=False, initializer="uniform"):
+        """Initialize the basic LSTM cell.
+        Args:
+          num_units: int, The number of units in the LSTM cell.
+          forget_bias: float, The bias added to forget gates (see above).
+          input_size: Deprecated and unused.
+          state_is_tuple: If True, accepted and returned states are 2-tuples of
+            the `c_state` and `m_state`.  If False, they are concatenated
+            along the column axis.  The latter behavior will soon be deprecated.
+          activation: Activation function of the inner states.
+        """
+        if not state_is_tuple:
+            logging.warn("%s: Using a concatenated state is slower and will soon be "
+                         "deprecated.  Use state_is_tuple=True.", self)
+        if input_size is not None:
+            logging.warn("%s: The input_size parameter is deprecated.", self)
+        self._num_units = num_units
+        self._forget_bias = forget_bias
+        self._state_is_tuple = state_is_tuple
+        self._activation = activation
+        self._sparsity = sparsity
+        self._use_sparse_mul = use_sparse_mul
+        self.initializer = initializer
+
+    @property
+    def state_size(self):
+        return (LSTMStateTuple(self._num_units, self._num_units)
+                if self._state_is_tuple else 2 * self._num_units)
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    @property
+    def sparsity(self):
+        return self._sparsity
+
+    def __call__(self, inputs, state, scope=None):
+        """Long short-term memory cell (LSTM)."""
+        with vs.variable_scope(scope or type(self).__name__):  # "BasicLSTMCell"
+            # Parameters of gates are concatenated into one multiply for efficiency.
+            if self._state_is_tuple:
+                c, h = state
+            else:
+                c, h = array_ops.split(state, 2, 1)
+            # concat = _linear([inputs, h], 4 * self._num_units, True)
+            # print("output_size {}".format(self._num_units))
+            i = _sparse_linear([inputs, h], self._num_units, True, initializer=self.initializer,
+                               sparsity=self._sparsity, use_sparse_mul=self._use_sparse_mul, name="input_gate")
+            j = _sparse_linear([inputs, h], self._num_units, True, initializer=self.initializer,
+                               sparsity=self._sparsity, use_sparse_mul=self._use_sparse_mul, name="new_input")
+            f = _sparse_linear([inputs, h], self._num_units, True, initializer=self.initializer,
+                               sparsity=self._sparsity, use_sparse_mul=self._use_sparse_mul, name="forget_gate")
+            o = _sparse_linear([inputs, h], self._num_units, True, initializer=self.initializer,
+                               sparsity=self._sparsity, use_sparse_mul=self._use_sparse_mul, name="output_gate")
+
+            # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+
+            new_c = (c * sigmoid(f + self._forget_bias) + sigmoid(i) *
+                     self._activation(j))
+            new_h = self._activation(new_c) * sigmoid(o)
+
+            if self._state_is_tuple:
+                new_state = LSTMStateTuple(new_c, new_h)
+            else:
+                new_state = array_ops.concat([new_c, new_h], 1)
+            return new_h, new_state
+
+
+def _sparse_linear(args, output_size, bias, initializer="uniform", bias_start=0.0, scope=None, sparsity=0.1,
+                   use_sparse_mul=False, name=""):
     if args is None or (nest.is_sequence(args) and not args):
         raise ValueError("`args` must be specified")
     if not nest.is_sequence(args):
@@ -1182,8 +1421,8 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity
         if use_sparse_mul:
             # print("Use tf.sparse_tensor_dense_matmul !")
             sparse_matrix = get_sparse_weight_matrix([total_arg_size, output_size], sparsity=sparsity,
-                                                     out_type="sparse",
-                                                     dtype=dtype)
+                                                     out_type="sparse", initializer=initializer,
+                                                     dtype=dtype, name=name)
             sparse_matrix = tf.sparse_transpose(sparse_matrix, perm=[1, 0])
             if len(args) == 1:
                 # res = math_ops.matmul(args[0], sparse_matrix,b_is_sparse=True)
@@ -1194,7 +1433,7 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity
             res = tf.transpose(res, perm=[1, 0])
         else:
             sparse_matrix = get_sparse_weight_matrix([total_arg_size, output_size], sparsity=sparsity, out_type="dense",
-                                                     dtype=dtype)
+                                                     dtype=dtype, name=name)
             if len(args) == 1:
                 res = math_ops.matmul(args[0], sparse_matrix, b_is_sparse=True)
             else:
@@ -1204,7 +1443,7 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity
         if not bias:
             return res
         bias_term = vs.get_variable(
-            "Bias", [output_size],
+            "Bias_" + name, [output_size],
             dtype=dtype,
             initializer=init_ops.constant_initializer(
                 bias_start, dtype=dtype))
@@ -1213,7 +1452,7 @@ def _sparse_linear(args, output_size, bias, bias_start=0.0, scope=None, sparsity
 
 
 def get_sparse_weight_matrix(shape, sparsity=0.1, initializer="uniform", init_scale=0.1, out_type="sparse",
-                             dtype=tf.float32):
+                             dtype=tf.float32, name=""):
     # Directly Initialize the sparse matrix
     total_arg_size, output_size = shape
     sparse_size = int(total_arg_size * sparsity)  # Make sure every hidden units have same number of connection
@@ -1221,8 +1460,11 @@ def get_sparse_weight_matrix(shape, sparsity=0.1, initializer="uniform", init_sc
     # print(
     #     "Sparsity:{}  total_arg_size:{}   sparse_size:{}  output_size:{}".format(sparsity, total_arg_size, sparse_size,
     #                                                                              output_size))
-    sparse_indices = get_sparse_index(total_arg_size, sparse_size, output_size)
-    sparse_value = get_sparse_value(sparse_size, output_size, initializer, init_scale=init_scale, dtype=dtype)
+    # print("total_arg_size", total_arg_size)
+    # print("sparse size", sparse_size)
+    sparse_indices = get_sparse_index(total_arg_size, sparse_size, output_size, name=name)
+    sparse_value = get_sparse_value(sparse_size, output_size, initializer, init_scale=init_scale, dtype=dtype,
+                                    name=name)
     if out_type == "sparse":
         sparse_weight_matrix = tf.SparseTensor(indices=sparse_indices, values=sparse_value, dense_shape=shape)
     elif out_type == "dense":
@@ -1234,110 +1476,42 @@ def get_sparse_weight_matrix(shape, sparsity=0.1, initializer="uniform", init_sc
     return sparse_weight_matrix
 
 
-def get_sparse_value(sparse_size, output_size, initializer, init_scale=0.1, dtype=tf.float32):
+def get_sparse_value(sparse_size, output_size, initializer, init_scale=0.1, dtype=tf.float32, name=""):
     shape = [sparse_size * output_size]
     # Modify the init scale
     if initializer == "uniform":
-        sparse_value = tf.get_variable("sparse_value", shape=shape, dtype=dtype,
+        sparse_value = tf.get_variable("sparse_value_" + name, shape=shape, dtype=dtype,
                                        initializer=tf.initializers.random_uniform(minval=-init_scale,
                                                                                   maxval=init_scale))
     elif initializer == "normal":
-        sparse_value = tf.get_variable("sparse_value", shape=shape, dtype=dtype,
+        sparse_value = tf.get_variable("sparse_value_" + name, shape=shape, dtype=dtype,
                                        initializer=tf.initializers.random_normal(stddev=init_scale))
-    elif initializer == "xavier":
-        raise NotImplementedError
+    elif initializer == "glorot_uniform":
+        sparse_value = tf.get_variable("sparse_value_" + name, shape=shape, dtype=dtype,
+                                       initializer=tf.glorot_uniform_initializer())
+    elif initializer == "glorot_normal":
+        sparse_value = tf.get_variable("sparse_value_" + name, shape=shape, dtype=dtype,
+                                       initializer=tf.glorot_normal_initializer())
     else:
         raise ValueError("Unknown Initializer")
 
+    # print(sparse_value)
     return sparse_value
 
 
-def get_sparse_index(total_arg_size, sparse_size, output_size):
-    # index = tf.random_uniform(shape=[sparse_size, output_size],minval=0,maxval=total_arg_size - 1,dtype=tf.int32)
-    # index = np.random.randint(low=0, high=total_arg_size - 1, size=[sparse_size, output_size])
+def get_sparse_index(total_arg_size, sparse_size, output_size, name=""):
     shape = sparse_size * output_size
-    index = tf.get_variable("sparse_index", shape=[shape, 1], dtype=tf.int64,
+    # print(sparse_size, output_size, shape)
+    index = tf.get_variable("sparse_index_" + name, shape=[shape, 1], dtype=tf.int64,
                             initializer=tf.initializers.random_uniform(maxval=total_arg_size - 1, dtype=tf.int64),
                             trainable=False)
-    constant = tf.convert_to_tensor(np.array([i for i in range(output_size)]) * np.ones(
-        shape=[sparse_size, output_size]), dtype=tf.int64)
+    constant = tf.convert_to_tensor(np.array([i for i in range(output_size)]).astype(int) * np.ones(
+        shape=[sparse_size, output_size], dtype=np.int64), dtype=tf.int64)
     constant = tf.reshape(tf.transpose(constant), [shape, 1])
     index_list = tf.concat([index, constant], axis=1)
 
     return index_list
 
-def _klinear_flat(args, output_size, bias, bias_start=0.0, scope=None):
-    """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
-    Args:
-      args: a 2D Tensor or a list of 2D, batch x n, Tensors.
-      output_size: int, second dimension of W[i].
-      bias: boolean, whether to add a bias term or not.
-      bias_start: starting value to initialize the bias; 0 by default.
-      scope: VariableScope for the created subgraph; defaults to "Linear".
-    Returns:
-      A 2D Tensor with shape [batch x output_size] equal to
-      sum_i(args[i] * W[i]), where W[i]s are newly created matrices.
-    Raises:
-      ValueError: if some of the arguments has unspecified or wrong shape.
-    """
-    if args is None or (nest.is_sequence(args) and not args):
-        raise ValueError("`args` must be specified")
-    if not nest.is_sequence(args):
-        args = [args]
-
-    # Calculate the total size of arguments on dimension 1.
-    total_arg_size = 0
-    shapes = [a.get_shape().as_list() for a in args]
-    for shape in shapes:
-        if len(shape) != 2:
-            raise ValueError("Linear is expecting 2D arguments: %s" % str(shapes))
-        if not shape[1]:
-            raise ValueError("Linear expects shape[1] of arguments: %s" % str(shapes))
-        else:
-            total_arg_size += shape[1]
-
-    dtype = [a.dtype for a in args][0]
-
-    # Now the computation.
-
-    # total_arg_size/input = 400
-    # break it into 20 x 20
-    # output_size = 800
-    # break it into 20 x 40
-
-    # outputsize: 4 * 200          =>   4 * 50**2 = 100*100 = 10000
-    # outputsize: 4 * 200          =>   4 * 20**2 = 400*400 = 1600
-    # inputsize: 200 + 200          =>   2500 + 2500 =  100 * 50
-    # inputsize: 200 + 200          =>   200 + 2500 =  100 * 50
-    # hundredth_total_arg_size = int(total_arg_size/100)
-    in_sqrt = int(np.sqrt(total_arg_size))
-    part_in1 = in_sqrt
-    part_in2 = in_sqrt
-    part_out1 = output_size
-    part_out2 = output_size
-
-    with vs.variable_scope(scope or "Linear"):
-        matrix1 = vs.get_variable(
-            "Matrix1", [part_in1, part_out1], dtype=dtype)
-        matrix2 = vs.get_variable(
-            "Matrix2", [part_in2, part_out2], dtype=dtype)
-
-        if True:
-            input_tensor = array_ops.concat(args, 1)
-
-            inputX_reshaped = tf.reshape(input_tensor, (-1, part_in1, part_in2))
-            inputX_reshaped_L = tf.reduce_sum(inputX_reshaped, 1)
-            inputX_reshaped_R = tf.reduce_sum(inputX_reshaped, 2)
-            res = tf.matmul(inputX_reshaped_L, matrix1) + tf.matmul(inputX_reshaped_R, matrix2)
-
-        if not bias:
-            return res
-        bias_term = vs.get_variable(
-            "Bias", [output_size],
-            dtype=dtype,
-            initializer=init_ops.constant_initializer(
-                bias_start, dtype=dtype))
-    return tf.nn.bias_add(res, bias_term)
 
 def debug_tensor(s, msg=None, summarize=10):
     """Print the shape and value of a tensor at test time. Return a new tensor."""

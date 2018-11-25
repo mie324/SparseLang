@@ -35,13 +35,13 @@ def main(unused_argv):
     train_data, valid_data, test_data, _ = raw_data
 
     config = get_config()
-    if FLAGS.larger_hidden_size:
-        config.hidden_size = int(config.hidden_size / np.sqrt(FLAGS.sparsity))
+    eval_config = get_eval_config()
+    if FLAGS.larger_hidden_size and FLAGS.model_type == "sparse":
+        config.hidden_size = int(np.square(int(np.sqrt(config.hidden_size / np.sqrt(FLAGS.sparsity)))))
+        eval_config.hidden_size = config.hidden_size
         print("Increase Hidden Size: {}".format(config.hidden_size))
     print_config(config)
     print_flags(FLAGS)
-
-    eval_config = get_eval_config()
 
     with tf.Graph().as_default():
         initializer = tf.random_uniform_initializer(-config.init_scale, config.init_scale)
@@ -49,6 +49,7 @@ def main(unused_argv):
         with tf.name_scope("Train"):
             train_input = PTBInput(config=config, data=train_data, name="TrainInput")
             with tf.variable_scope("Model", reuse=None, initializer=initializer):
+                print("Create train Model!")
                 m = PTBModel(is_training=True, config=config, input_=train_input)
             tf.summary.scalar("Training Loss", m.cost)
             tf.summary.scalar("Learning Rate", m.lr)
@@ -56,14 +57,15 @@ def main(unused_argv):
         with tf.name_scope("Valid"):
             valid_input = PTBInput(config=config, data=valid_data, name="ValidInput")
             with tf.variable_scope("Model", reuse=True, initializer=initializer):
+                print("Create valid Model!")
                 mvalid = PTBModel(is_training=False, config=config, input_=valid_input)
             tf.summary.scalar("Validation Loss", mvalid.cost)
 
         with tf.name_scope("Test"):
             test_input = PTBInput(config=eval_config, data=test_data, name="TestInput")
             with tf.variable_scope("Model", reuse=True, initializer=initializer):
-                mtest = PTBModel(is_training=False, config=eval_config,
-                                 input_=test_input)
+                print("Create test Model!")
+                mtest = PTBModel(is_training=False, config=eval_config, input_=test_input)
 
         print("####### Total Number of Parameters: {}".format(get_num_para()))
         print_variable()
@@ -134,3 +136,11 @@ if __name__ == "__main__":
     # python ptb_word_knet.py --data_path data --model large --useKnetOutput --useKnet
     # python main.py --data_path data --model_size small --model_type baseline --optimizer adam
     # python main.py --data_path data --model_size small --model_type sparse --optimizer adam --debug --save_path temp
+
+    # baseline: 816   637    3893200    561     513;    449     429        speed:12.9k
+    # k_out:  840   647   3293200   571    525;     454     424     speed:12.6k
+    # 0.01 sparse: 1931 767 442000   773     763    767     760
+
+    # Largest 3000 hidden       speed: 2.1k     120M
+    # baseline:  563  372;  276     287;
+    # knet: 624     433;    317     307;    212     262;    160     240
