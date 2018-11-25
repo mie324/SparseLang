@@ -1434,11 +1434,15 @@ def _sparse_linear(args, output_size, bias, initializer="uniform", bias_start=0.
         else:
             sparse_matrix = get_sparse_weight_matrix([total_arg_size, output_size], sparsity=sparsity, out_type="dense",
                                                      dtype=dtype, name=name)
+            sparse_matrix = tf.transpose(sparse_matrix, perm=[1, 0])
             if len(args) == 1:
-                res = math_ops.matmul(args[0], sparse_matrix, b_is_sparse=True)
+                input = tf.transpose(args[0], perm=[1, 0])
+                res = math_ops.matmul(sparse_matrix, input)
             else:
                 # res = math_ops.matmul(array_ops.concat(args, 1, ), sparse_matrix, b_is_sparse=True)
-                res = math_ops.matmul(array_ops.concat(args, 1, ), sparse_matrix)
+                input = tf.transpose(array_ops.concat(args, 1, ), perm=[1, 0])
+                res = math_ops.matmul(sparse_matrix, input)
+            res = tf.transpose(res, perm=[1, 0])
 
         if not bias:
             return res
