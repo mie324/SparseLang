@@ -854,7 +854,8 @@ class _SlimRNNCell(RNNCell):
 
 
 def _linear(args, output_size, bias, bias_start=0.0, scope=None):
-    """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
+    """
+    Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
     Args:
       args: a 2D Tensor or a list of 2D, batch x n, Tensors.
       output_size: int, second dimension of W[i].

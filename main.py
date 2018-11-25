@@ -5,6 +5,7 @@ import numpy as np
 from model.model_config import *
 from model.model import *
 from utils.misc import print_config, print_flags, get_num_para, print_variable
+from dataset import reader_v2
 
 FLAGS = tf.flags.FLAGS
 
@@ -31,8 +32,11 @@ def main(unused_argv):
         print("Create save directory {}".format(FLAGS.save_path))
         os.makedirs(FLAGS.save_path)
 
-    raw_data = reader.ptb_raw_data(FLAGS.data_path)
+    # raw_data = reader.ptb_raw_data(FLAGS.data_path) # numericalized data: text --> integer
+    # train_data, valid_data, test_data, _ = raw_data
+    raw_data = reader_v2.ptb_raw_data_sentence(FLAGS.data_path) # numericalized data: text --> integer
     train_data, valid_data, test_data, _ = raw_data
+
 
     config = get_config()
     eval_config = get_eval_config()
