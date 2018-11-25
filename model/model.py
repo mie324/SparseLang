@@ -2,7 +2,7 @@ import tensorflow as tf
 from dataset import reader
 from reference import rnn_cell
 from model import sparse_rnn_cell
-from model.sparse_rnn_cell import _sparse_linear,_klinear_flat,_linear
+from model.sparse_rnn_cell import _sparse_linear, _klinear_flat, _linear, BasicLSTMCell_knet
 
 FLAGS = tf.flags.FLAGS
 
@@ -15,6 +15,8 @@ tf.flags.DEFINE_boolean('useAdam', True, """use Adam optimizer""")
 
 tf.flags.DEFINE_float("sparsity", 0.1, "gpu_memory_fraction.")
 tf.flags.DEFINE_boolean('use_sparse_mul', True, """tf.sparse_tensor_dense_matmul""")
+tf.flags.DEFINE_string("sparse_initializer", "uniform", "normal|uniform|glorot_uniform|glorot_normal")
+tf.flags.DEFINE_boolean('split_gate', False, """Whether or not split the gate for """)
 
 
 def data_type():
@@ -52,15 +54,20 @@ class PTBModel(object):
             lstm_cell = rnn_cell.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True)
         elif FLAGS.model_type == "sparse":
             print("Use Sparse RNN with sparsity {}".format(FLAGS.sparsity))
-            if FLAGS.use_sparse_mul:
+            if FLAGS.sparsity < 0.01 and FLAGS.use_sparse_mul:
                 print("Use tf.sparse_tensor_dense_matmul")
+                lstm_cell = sparse_rnn_cell.BasicLSTMCell_sparse(size, forget_bias=0.0, state_is_tuple=True,
+                                                                 sparsity=FLAGS.sparsity,
+                                                                 initializer=FLAGS.sparse_initializer,
+                                                                 use_sparse_mul=True,split_gate=FLAGS.split_gate)
             else:
                 print("Use normal matmul")
-            lstm_cell = sparse_rnn_cell.BasicLSTMCell_sparse(size, forget_bias=0.0, state_is_tuple=True,
-                                                             sparsity=FLAGS.sparsity,
-                                                             use_sparse_mul=FLAGS.use_sparse_mul)
+                lstm_cell = sparse_rnn_cell.BasicLSTMCell_sparse(size, forget_bias=0.0, state_is_tuple=True,
+                                                                 sparsity=FLAGS.sparsity,
+                                                                 initializer=FLAGS.sparse_initializer,
+                                                                 use_sparse_mul=False,split_gate=FLAGS.split_gate)
         elif FLAGS.model_type == "knet":
-            lstm_cell = rnn_cell.BasicLSTMCell_knet(size, forget_bias=0.0, state_is_tuple=True)
+            lstm_cell = BasicLSTMCell_knet(size, forget_bias=0.0, state_is_tuple=True)
         else:
             raise ValueError("Unknown rnn type")
 
@@ -105,6 +112,7 @@ class PTBModel(object):
         with tf.variable_scope("RNN") as scope:
             for time_step in range(num_steps):
                 if time_step > 0: tf.get_variable_scope().reuse_variables()
+                print("Create cell {}".format(time_step))
                 (cell_output, state) = cell(inputs[:, time_step, :], state)
                 with tf.variable_scope("softmax") as scope:
                     if FLAGS.output_type == "linear":
