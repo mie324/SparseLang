@@ -6,12 +6,11 @@ import tensorflow as tf
 import os
 import numpy as np
 from dataset.reader import _build_vocab
+import argparse
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_integer("batch_size", 128, "Batch size.")
-
-def convert_to_sentence():
-    pass
+tf.flags.DEFINE_integer("buffer_size", 30, "Buffer size.")
 
 
 def parse_exmp(source):
@@ -132,20 +131,150 @@ def train_input(filename):
     dataset = dataset_generator(filename)
     dataset = tf.Dataset.from_numpy
 
-def main():
+def generate_labels(filename , path_labels):
+    label_file = open(path_labels, "a+")
+    with tf.gfile.GFile(filename, "r") as f:
+        sentences = f.read().split('\n')
+        for i, sentence in enumerate(sentences):
+            if len(sentence.split()) < 2:
+                sentence = sentence
+            else:
+                sentence = sentence.split(None, 1)[1] + ' <unk> '
+
+            label_file.write(sentence + "\r\n")
+    label_file.close
+
+
+def load_dataset_from_text(path_txt, vocab):
+    """Create tf.data Instance from txt file
+    Args:
+        path_txt: (string) path containing one example per line
+        vocab: (tf.lookuptable)
+    Returns:
+        dataset: (tf.Dataset) yielding list of ids of tokens for each example
+    """
+    # Load txt file, one example per line
+    dataset = tf.data.TextLineDataset(path_txt)
+
+    # Convert line into list of tokens, splitting by white space
+    dataset = dataset.map(lambda string: tf.string_split([string]).values)
+
+    # Lookup tokens to return their ids
+    dataset = dataset.map(lambda tokens: (vocab.lookup(tokens), tf.size(tokens)))
+
+    return dataset
+
+
+def input_fn(mode, sentences, labels, params):
+    """Input function for NER
+    Args:
+        mode: (string) 'train', 'eval' or any other mode you can think of
+                     At training, we shuffle the data and have multiple epochs
+        sentences: (tf.Dataset) yielding list of ids of words
+        datasets: (tf.Dataset) yielding list of ids of tags
+        params: (Params) contains hyperparameters of the model (ex: `params.num_epochs`)
+    """
+    # Load all the dataset in memory for shuffling is training
+    is_training = (mode == 'train')
+    buffer_size = params.buffer_size if is_training else 1
+
+    # Zip the sentence and the labels together
+    dataset = tf.data.Dataset.zip((sentences, labels))
+
+    # Create batches and pad the sentences of different length
+    padded_shapes = ((tf.TensorShape([None]),  # sentence of unknown size
+                      tf.TensorShape([])),     # size(words)
+                     (tf.TensorShape([None]),  # labels of unknown size
+                      tf.TensorShape([])))     # size(tags)
+
+    padding_values = ((params.id_pad_word,   # sentence padded on the right with id_pad_word
+                       0),                   # size(words) -- unused
+                      (params.id_pad_tag,    # labels padded on the right with id_pad_tag
+                       0))                   # size(tags) -- unused
+
+
+    dataset = (dataset
+        .shuffle(buffer_size=buffer_size)
+        .padded_batch(params.batch_size, padded_shapes=padded_shapes, padding_values=padding_values)
+        .prefetch(1)  # make sure always have one batch ready to serve
+    )
+
+    # Create initializable iterator from this dataset so that we can reset at each epoch
+    iterator = dataset.make_initializable_iterator()
+
+    # Query the output of the iterator for input to the model
+    ((sentence, sentence_lengths), (labels, _)) = iterator.get_next()
+    init_op = iterator.initializer
+
+    # Build and return a dictionnary containing the nodes / ops
+    inputs = {
+        'sentence': sentence,
+        'labels': labels,
+        'sentence_lengths': sentence_lengths,
+        'iterator_init_op': init_op
+    }
+
+    return inputs
+
+def main(args):
     print(os.getcwd())
     filename = '../data/ptb.train.txt'
-    outFile_name = "./words.txt"
-    split_dataset(filename)
-    saveTokens(outFile_name, filename)
-    words = tf.contrib.lookup.index_table_from_file("./words.txt", num_oov_buckets=1)
-    dataset = split_dataset(filename)
-    dataset = word_to_id(filename, dataset)
-    print('haha')
+    path_words = "./words.txt"
 
-    # dataset_generator(filename)
-    # train_input_fn(filename)
+    # split_dataset(filename)
+    # outFile_name = "./words.txt"
+    # saveTokens(outFile_name, filename)
+    # words = tf.contrib.lookup.index_table_from_file("./words.txt", num_oov_buckets=1)
+    # dataset = split_dataset(filename)
+    # dataset = word_to_id(filename, dataset)
+
+    # Load Vocabularies
+    words = tf.contrib.lookup.index_table_from_file(path_words, num_oov_buckets=1) # num_oov_buckets specifies the number of buckets created for unknow words， set to 1
+
+    path_train_sentences = '../data/ptb.train.txt'
+    path_train_labels = './train.labels.txt'
+    path_valid_sentences = '../data/ptb.valid.txt'
+    path_valid_labels = './valid.labels.txt'
+    path_test_sentences = '../data/ptb.test.txt'
+    path_test_labels = './test.labels.txt'
+    generate_labels(path_train_sentences,path_train_labels)
+    generate_labels(path_valid_sentences, path_valid_labels)
+    generate_labels(path_test_sentences, path_test_labels)
+
+    train_sentences = load_dataset_from_text(path_train_sentences, words)
+    train_labels = load_dataset_from_text(path_train_labels, words)
+    eval_sentences = load_dataset_from_text(path_valid_sentences, words)
+    eval_labels = load_dataset_from_text(path_valid_labels, words)
+    test_sentences = load_dataset_from_text(path_test_sentences, words)
+    test_labels = load_dataset_from_text(path_test_labels, words)
+
+    # Specify other parameters for the dataset and the model
+    # args.eval_size = args.dev_size
+    # args.buffer_size = args.train_size  # buffer size for shuffling
+    args.id_pad_word = words.lookup(tf.constant(args.pad_word))
+    args.id_pad_tag = words.lookup(tf.constant(args.pad_tag))
+
+    # Create the two iterators over the two datasets
+    train_inputs = input_fn('train', train_sentences, train_labels, args)
+    eval_inputs = input_fn('eval', eval_sentences, eval_labels, args)
+    test_inputs = input_fn('eval', test_sentences, test_labels, args)
+
+    print("- done.")
+
 if __name__ == '__main__':
 
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--eval_size', default=int)
+    parser.add_argument('--buffer_size', default=30, help="buffer size for shuffling")
+    parser.add_argument('--id_pad_word', default=int)
+    parser.add_argument('--id_pad_tag', default=int)
+    parser.add_argument('--batch_size', default=128)
+    parser.add_argument('--pad_word', default='<unk>')
+    parser.add_argument('--pad_tag', default='<unk>')
+    args = parser.parse_args()
+
+    main(args)
+
+
+
 
