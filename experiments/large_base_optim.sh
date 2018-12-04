@@ -1,0 +1,2 @@
+srun --gres=gpu:1 -c 5 -l -p gpu --mem 20gb python main.py --data_path data --model_size large --model_type knet optimizer adam --save_path knet_large_ba/adam --output_type knet &
+srun --gres=gpu:1 -c 5 -l -p gpu --mem 20gb python main.py --data_path data --model_size large --model_type knet optimizer sgd --save_path knet_large_ba/sgd --output_type knet 
